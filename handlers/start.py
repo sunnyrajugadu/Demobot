@@ -5,7 +5,7 @@ import aiohttp
 from bson import ObjectId
 
 from pyrogram import filters
-from pyrogram.types import Message, ChatMemberUpdated
+from pyrogram.types import Message, ChatMemberUpdated, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot import app
 from config import START_IMAGES
@@ -35,6 +35,39 @@ HTTP_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 }
+
+
+def group_start_buttons(bot_username: str = None):
+    """
+    Group specific start keyboard layout:
+    Row 1: Add Me to Your Groups
+    Row 2: Updates | About
+    """
+    if bot_username:
+        add_group_url = f"https://t.me/{bot_username}?startgroup=true&admin=change_info+delete_messages+invite_users+pin_messages"
+    else:
+        add_group_url = "https://t.me/"
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "➕ Add Me to Your Groups",
+                    url=add_group_url
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📢 Updates",
+                    url="https://t.me/mrDuDeHoLic"
+                ),
+                InlineKeyboardButton(
+                    "☺️ About",
+                    callback_data="home_about"
+                )
+            ]
+        ]
+    )
 
 
 async def download_image_stream(url: str) -> io.BytesIO | None:
@@ -109,6 +142,69 @@ async def bot_added_to_group(client, chat_member_updated: ChatMemberUpdated):
             await client.send_message(chat.id, text)
     except Exception as e:
         print(f"[group watcher error] {e}", flush=True)
+
+
+# ============================================================
+# GROUP /START COMMAND HANDLER
+# ============================================================
+
+@app.on_message(
+    filters.group & filters.command("start")
+)
+async def group_start_command(client, message: Message):
+    print("GROUP START HANDLER CALLED", flush=True)
+
+    bot_info = await client.get_me()
+    bot_username = bot_info.username if bot_info else None
+
+    caption = (
+        f"**🤖 Hello everyone in {message.chat.title}! 👋\n\n"
+        "✨ Welcome to CinemaVeta 🍿🔥\n\n"
+        "🔍 Search your favorite Movies & Series directly in this group using inline mode\n\n"
+        "💭 Just type the movie name or add me to more groups below!** 🚀"
+    )
+
+    markup = group_start_buttons(bot_username)
+
+    if not START_IMAGES:
+        return await message.reply_text(
+            text=caption,
+            reply_markup=markup,
+            quote=True
+        )
+
+    selected_url = random.choice(START_IMAGES)
+
+    try:
+        await message.reply_photo(
+            photo=selected_url,
+            caption=caption,
+            reply_markup=markup,
+            quote=True
+        )
+        return
+    except Exception:
+        pass
+
+    bio = await download_image_stream(selected_url)
+    if bio:
+        bio.seek(0)
+        try:
+            await message.reply_photo(
+                photo=bio,
+                caption=caption,
+                reply_markup=markup,
+                quote=True
+            )
+            return
+        except Exception:
+            pass
+
+    await message.reply_text(
+        text=caption,
+        reply_markup=markup,
+        quote=True
+    )
 
 
 # ============================================================
