@@ -49,7 +49,7 @@ print(
 # SETTINGS
 # ============================================================
 
-MENU_EXPIRE_SECONDS = 10
+MENU_EXPIRE_SECONDS = 300
 
 FILES_PER_PAGE = 7
 
