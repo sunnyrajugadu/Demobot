@@ -100,6 +100,7 @@ async def main():
     import handlers.inline
     import handlers.imdb
     import handlers.group
+    import handlers.group_search
     
     
 
