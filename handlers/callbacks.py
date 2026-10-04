@@ -682,6 +682,21 @@ async def check_expiry(query):
     return False
 
 
+# ============================================================
+# AUTO DELETE MENU AFTER 5 MINUTES
+# ============================================================
+
+async def auto_delete_menu(client, chat_id, message_id):
+    try:
+        await asyncio.sleep(MENU_EXPIRE_SECONDS)
+        await client.delete_messages(
+            chat_id=chat_id,
+            message_ids=message_id
+        )
+    except Exception:
+        pass
+
+
 
 # ============================================================
 # FILE BUTTON
