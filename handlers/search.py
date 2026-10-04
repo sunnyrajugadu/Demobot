@@ -190,10 +190,10 @@ def extract_distinct_movies(files_list, search_query: str):
                 year = year_match.group(1)
         
         if clean_title and len(clean_title) >= 3 and query_norm in clean_title.lower():
-            # Format: Movie Title (Year)
+            # Format: Movie Title - Year
             display_title = clean_title.title()
             if year:
-                display_title = f"{display_title} ({year})"
+                display_title = f"{display_title} - {year}"
             
             raw_entries[display_title] = clean_title
 
@@ -208,7 +208,7 @@ def extract_distinct_movies(files_list, search_query: str):
             exist_lower = exist_title.lower()
             # If the base titles are too similar AND years match (or no year), group them
             if (display_lower.startswith(exist_lower) or exist_lower.startswith(display_lower)) and \
-               (display_title.split("(")[-1] == exist_title.split("(")[-1]):
+               (display_title.split("-")[-1].strip() == exist_title.split("-")[-1].strip()):
                 matched = True
                 break
                 
@@ -432,7 +432,7 @@ async def execute_search(
             loading_msg = await client.send_message(
                 chat_id=chat_id,
                 text=f"**🔎 Searching** `{movie_name}` **. . .**",
-                reply_to_message_id=reply ni_to_message_id
+                reply_to_message_id=reply_to_message_id
             )
         except Exception:
             pass
@@ -449,8 +449,8 @@ async def execute_search(
         # 1. Search database
         results = await search_files(movie_name)
 
-        if not results and "(" in movie_name:
-            clean_name = movie_name.split("(")[0].strip()
+        if not results and "-" in movie_name:
+            clean_name = movie_name.split("-")[0].strip()
             if clean_name:
                 results = await search_files(clean_name)
 
@@ -459,7 +459,7 @@ async def execute_search(
             distinct_db_movies = extract_distinct_movies(results, movie_name)
 
             # Show selection menu if there are multiple variations
-            if len(distinct_db_movies) > 1 and not (len(distinct_db_movies) == 1 and distinct_db_movies[0].split("(")[0].strip().lower() == movie_name.lower()):
+            if len(distinct_db_movies) > 1 and not (len(distinct_db_movies) == 1 and distinct_db_movies[0].split("-")[0].strip().lower() == movie_name.lower()):
                 query_words = len(movie_name.strip().split())
                 if query_words <= 2:
                     buttons = []
@@ -503,9 +503,11 @@ async def execute_search(
                 if suggestions:
                     suggestion_buttons = []
                     for title in suggestions:
-                        # Fix for Spelling Suggestions: Keep the year (if present) for clarity
-                        cb_data = f"spell:{user_id}:{title[:45]}"
-                        suggestion_buttons.append([InlineKeyboardButton(title, callback_data=cb_data)])
+                        # Fix for Spelling Suggestions: Keep the year (if present) and convert brackets to hyphen for clarity
+                        clean_disp = title.split("(")[0].strip() if "(" in title else title
+                        display_text = title.replace("(", "- ").replace(")", "").strip()
+                        cb_data = f"spell:{user_id}:{clean_disp[:45]}"
+                        suggestion_buttons.append([InlineKeyboardButton(display_text, callback_data=cb_data)])
 
                     suggestion_buttons.append([InlineKeyboardButton("✘ CLOSE ✘", callback_data="close")])
 
@@ -582,8 +584,8 @@ async def execute_search(
                 target_lang = TMDB_LANG_MAP[l]
                 break
         
-        # Remove year in bracket from query before passing to IMDB if present
-        imdb_search_query = movie_name.split("(")[0].strip()
+        # Remove year after hyphen from query before passing to IMDB if present
+        imdb_search_query = movie_name.split("-")[0].strip()
         movie_details = await get_imdb_movie_details(imdb_search_query, preferred_lang=target_lang)
         landscape_banner_url = movie_details.get("image") if movie_details else None
 
@@ -592,7 +594,7 @@ async def execute_search(
         if movie_details and movie_details.get("title"):
             m_title = movie_details['title']
             if movie_details.get("year"):
-                m_title += f" ({movie_details['year']})"
+                m_title += f" - {movie_details['year']}"
             caption_lines.append(f"🎬 <b>{html.escape(m_title)}</b>\n")
         else:
             caption_lines.append(f"🎬 <b>{html.escape(movie_name.title())}</b>\n")
