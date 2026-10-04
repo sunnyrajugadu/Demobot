@@ -11,16 +11,30 @@ def start_buttons(bot_username: str = None):
     Main /start and Home keyboard.
 
     Row 1:
-        🔍 Search | 📢 Updates
+        ➕ Add to Group | 🔍 Search Movies
 
     Row 2:
+        📢 Updates
+
+    Row 3:
         ☺️ About
     """
+    # Group ki add chese URL ni create chestunnamu
+    add_group_url = f"https://t.me/{bot_username}?startgroup=true" if bot_username else "https://t.me/"
+
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("🔍 Search Movies", switch_inline_query_current_chat=""),
-
+                InlineKeyboardButton(
+                    "➕ Add to Group",
+                    url=add_group_url
+                ),
+                InlineKeyboardButton(
+                    "🔍 Search Movies",
+                    switch_inline_query_current_chat=""
+                )
+            ],
+            [
                 InlineKeyboardButton(
                     "📢 Updates",
                     url="https://t.me/mrDuDeHoLic"
