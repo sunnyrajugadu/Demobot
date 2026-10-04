@@ -2455,72 +2455,6 @@ async def back_search(
             pass
 
 
-# ============================================================
-# SPELLING SUGGESTION SELECTION CALLBACK
-# ============================================================
-
-@app.on_callback_query(
-    filters.regex(r"^spell:")
-)
-async def spelling_suggestion_callback(
-    client,
-    query: CallbackQuery
-):
-    """
-    Handles user clicking on spelling suggestion button.
-    Directly triggers the search using the exact corrected title.
-    """
-    try:
-        parts = query.data.split(":", 2)
-
-        if len(parts) < 3:
-            return await query.answer("❌ Invalid suggestion data", show_alert=True)
-
-        _, user_id_str, selected_movie = parts
-
-        try:
-            target_user_id = int(user_id_str)
-        except ValueError:
-            target_user_id = query.from_user.id
-
-        # Verify button belongs to the requester
-        if query.from_user.id != target_user_id:
-            return await query.answer(
-                "⚠️ This suggestion button is not for you",
-                show_alert=True
-            )
-
-        await query.answer(f"🔎 Searching: {selected_movie}")
-
-        # Delete the spelling suggestions menu immediately
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-        # Trigger direct search with selected title
-        # allow_spelling_suggestions=False guarantees that if file is missing in DB,
-        # it directly shows "Oops! I couldn't find" and auto-deletes in 10s!
-        from handlers.search import execute_search
-
-        reply_to_id = query.message.reply_to_message.id if query.message and query.message.reply_to_message else None
-
-        await execute_search(
-            client=client,
-            user=query.from_user,
-            chat_id=query.message.chat.id,
-            movie_name=selected_movie,
-            reply_to_message_id=reply_to_id,
-            allow_spelling_suggestions=False
-        )
-
-    except Exception as e:
-        print(f"❌ SPELL SUGGESTION CALLBACK ERROR: {e}", flush=True)
-        try:
-            await query.answer("❌ Failed to process movie selection", show_alert=True)
-        except Exception:
-            pass
-
 
 # ============================================================
 # CLOSE BUTTON CALLBACK
@@ -2544,76 +2478,6 @@ async def close_menu_callback(
             pass
 
 
-# ============================================================
-# UPDATED SPELLING & FRANCHISE SELECTION CALLBACK
-# ============================================================
-
-@app.on_callback_query(
-    filters.regex(r"^spell:")
-)
-async def spelling_suggestion_callback(
-    client,
-    query: CallbackQuery
-):
-    """
-    Handles user clicking on IMDb spelling / franchise suggestion button.
-    Extracts the selected movie name, cleans year brackets if needed for DB,
-    and calls execute_search with allow_spelling_suggestions=False so that
-    it displays the HD landscape banner and direct files.
-    """
-    try:
-        parts = query.data.split(":", 2)
-
-        if len(parts) < 3:
-            return await query.answer("❌ Invalid suggestion data", show_alert=True)
-
-        _, user_id_str, selected_movie = parts
-
-        try:
-            target_user_id = int(user_id_str)
-        except ValueError:
-            target_user_id = query.from_user.id
-
-        # Verify button belongs to the requester
-        if query.from_user.id != target_user_id:
-            return await query.answer(
-                "⚠️ This suggestion button is not for you",
-                show_alert=True
-            )
-
-        await query.answer(f"🔎 Searching: {selected_movie}")
-
-        # Get reply message id to link reply preview cleanly
-        reply_to_id = None
-        if query.message and query.message.reply_to_message:
-            reply_to_id = query.message.reply_to_message.id
-
-        # Delete the suggestions buttons menu
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-        from handlers.search import execute_search
-
-        # allow_spelling_suggestions=False guarantees that it directly fetches
-        # the Landscape Banner and sends files without re-triggering suggestions
-        await execute_search(
-            client=client,
-            user=query.from_user,
-            chat_id=query.message.chat.id,
-            movie_name=selected_movie,
-            reply_to_message_id=reply_to_id,
-            allow_spelling_suggestions=False
-        )
-
-    except Exception as e:
-        print(f"❌ SPELL SUGGESTION CALLBACK ERROR: {e}", flush=True)
-        try:
-            await query.answer("❌ Failed to process movie selection", show_alert=True)
-        except Exception:
-            pass
-
 
 # ============================================================
 # SEARCH INSTRUCTIONS ALERT CALLBACK
@@ -2629,4 +2493,194 @@ async def search_instructions_callback(client, query: CallbackQuery):
         "DON'T USE SYMBOLS....‼️"
     )
     await query.answer(alert_text, show_alert=True)
+
+
+# ============================================================
+# IMDb / SPELLING / FRANCHISE SELECTION CALLBACK
+# ============================================================
+
+@app.on_callback_query(
+    filters.regex(r"^spell:(\d+):([A-Za-z0-9]+)$")
+)
+async def spelling_suggestion_callback(
+    client,
+    query: CallbackQuery
+):
+    """
+    Handles IMDb / spelling / franchise selection.
+
+    Callback format:
+        spell:<user_id>:<token>
+
+    Example:
+        spell:123456789:fe992c731da8
+
+    The token is NOT searched directly.
+    It is converted back to the actual IMDb title using
+    search_handler.IMDB_SELECTIONS.
+
+    Year is PRESERVED.
+
+    Example:
+        token
+          ↓
+        Pushpa 2 (2024)
+          ↓
+        execute_search("Pushpa 2 (2024)")
+    """
+
+    try:
+
+        # ====================================================
+        # GET USER ID + TOKEN
+        # ====================================================
+
+        match = query.matches[0]
+
+        target_user_id = int(
+            match.group(1)
+        )
+
+        token = match.group(2)
+
+        # ====================================================
+        # USER CHECK
+        # ====================================================
+
+        if query.from_user.id != target_user_id:
+
+            await query.answer(
+                "⚠️ This selection is not for you.",
+                show_alert=True
+            )
+
+            return
+
+        # ====================================================
+        # IMPORT SEARCH MODULE
+        # ====================================================
+
+        from handlers import search as search_handler
+
+        # ====================================================
+        # TOKEN → ACTUAL IMDb TITLE
+        # ====================================================
+
+        selected_movie = (
+            search_handler.IMDB_SELECTIONS.get(
+                token
+            )
+        )
+
+        # ====================================================
+        # TOKEN NOT FOUND / EXPIRED
+        # ====================================================
+
+        if not selected_movie:
+
+            await query.answer(
+                "⚠️ This IMDb selection expired. Please search again.",
+                show_alert=True
+            )
+
+            return
+
+        # ====================================================
+        # KEEP YEAR EXACTLY
+        #
+        # Example:
+        # Pushpa 2 (2024)
+        #
+        # DO NOT remove year.
+        # ====================================================
+
+        selected_movie = str(
+            selected_movie
+        ).strip()
+
+        # ====================================================
+        # REMOVE USED TOKEN
+        # ====================================================
+
+        search_handler.IMDB_SELECTIONS.pop(
+            token,
+            None
+        )
+
+        # ====================================================
+        # SEARCHING ALERT
+        # ====================================================
+
+        await query.answer(
+            f"🔎 Searching: {selected_movie}"
+        )
+
+        # ====================================================
+        # GET ORIGINAL USER MESSAGE ID
+        # ====================================================
+
+        reply_to_id = None
+
+        try:
+
+            if (
+                query.message
+                and query.message.reply_to_message
+            ):
+
+                reply_to_id = (
+                    query.message
+                    .reply_to_message
+                    .id
+                )
+
+        except Exception:
+
+            reply_to_id = None
+
+        # ====================================================
+        # DELETE IMDb SELECTION MENU
+        # ====================================================
+
+        try:
+
+            if query.message:
+
+                await query.message.delete()
+
+        except Exception:
+
+            pass
+
+        # ====================================================
+        # EXECUTE SEARCH
+        # ====================================================
+
+        await search_handler.execute_search(
+            client=client,
+            user=query.from_user,
+            chat_id=query.message.chat.id,
+            movie_name=selected_movie,
+            reply_to_message_id=reply_to_id,
+            allow_spelling_suggestions=False
+        )
+
+    except Exception as e:
+
+        print(
+            f"❌ IMDb SELECTION CALLBACK ERROR: {e}",
+            flush=True
+        )
+
+        try:
+
+            await query.answer(
+                "❌ Failed to process movie selection.",
+                show_alert=True
+            )
+
+        except Exception:
+
+            pass
+
 
