@@ -57,6 +57,8 @@ def fast_parse_media(doc, is_video, caption, chat_id, msg_id, msg_date):
     else:
         timestamp = int(time.time())
 
+    file_size = getattr(doc, "size", 0) or 0
+
     data = {
         "file_id": file_id,
         "file_unique_id": file_unique_id,
@@ -67,7 +69,7 @@ def fast_parse_media(doc, is_video, caption, chat_id, msg_id, msg_date):
         "language": "Unknown",
         "quality": "Unknown",
         "audio": "Unknown",
-        "file_size_bytes": getattr(doc, "size", 0) or 0,
+        "file_size_bytes": file_size,
         "file_type": media_type,
         "message_id": msg_id,
         "channel_id": chat_id,
@@ -76,8 +78,15 @@ def fast_parse_media(doc, is_video, caption, chat_id, msg_id, msg_date):
         "updated_at": int(time.time())
     }
 
+    # ============================================================
+    # 🔴 DB DUPLICATE CHECK FIX (Name + Size)
+    # If file_name and file_size_bytes already exist, MongoDB skips it.
+    # ============================================================
     return UpdateOne(
-        {"file_unique_id": file_unique_id},
+        {
+            "file_name": file_name,
+            "file_size_bytes": file_size
+        },
         {"$setOnInsert": data},
         upsert=True
     )
@@ -157,7 +166,18 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
             if not doc:
                 continue
 
-            sig = zlib.crc32(f"{doc.id}:{getattr(doc, 'size', 0)}".encode("utf-8"))
+            # ============================================================
+            # 🔴 IN-MEMORY DUPLICATE CHECK FIX (Name + Size)
+            # Extracts filename first, hashes it with size to skip repeats in the same run
+            # ============================================================
+            temp_file_name = ""
+            for attr in getattr(doc, "attributes", []):
+                if isinstance(attr, raw.types.DocumentAttributeFilename):
+                    temp_file_name = attr.file_name
+            
+            temp_file_size = getattr(doc, 'size', 0) or 0
+            
+            sig = zlib.crc32(f"{temp_file_name}:{temp_file_size}".encode("utf-8"))
             if sig in stats["batch_seen"]:
                 stats["skipped_duplicates"] += 1
                 continue
