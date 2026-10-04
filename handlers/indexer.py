@@ -3,7 +3,7 @@ import time
 from pyrogram import filters
 from pyrogram.types import Message
 
-from bot import app
+from bot import app, user_app_1
 from config import STORAGE_CHANNEL_ID, OWNER_ID
 from database.models import save_file
 from utils.rename import (
@@ -45,7 +45,7 @@ async def manual_reindex_handler(client, message: Message):
         return
 
     is_reindexing = True
-    status_msg = await message.reply_text("⚡ <b>Starting Parallel Chunk Reindex...</b>")
+    status_msg = await message.reply_text("⚡ <b>Starting 2-Session Parallel Reindex...</b>")
 
     try:
         await reindex_channel(status_message=status_msg)
@@ -68,6 +68,12 @@ async def auto_index(
     message: Message
 ):
     try:
+        # ====================================================
+        # ENSURE USER SESSION IS CONNECTED FOR REAL-TIME FETCHING
+        # ====================================================
+        if user_app_1 and not user_app_1.is_connected:
+            await user_app_1.start()
+
         # ====================================================
         # GET MEDIA
         # ====================================================
