@@ -739,3 +739,78 @@ async def search_movie_handler(
             await message.reply_text("⚠️ Something went wrong.", quote=True)
         except Exception:
             pass
+
+
+
+# ================= GROUP TEXT & SEARCH HANDLER ================= #
+
+@app.on_message(
+    filters.group
+    & filters.text
+    & ~filters.command(
+        [
+            "start",
+            "stats",
+            "broadcast",
+            "reindex",
+            "reload",
+            "ping",
+            "usage",
+            "owner",
+            "delete",
+            "generate_link",
+            "imdb"
+        ]
+    )
+)
+async def group_movie_search_handler(
+    client,
+    message: Message
+):
+    try:
+        if not message.from_user:
+            return
+
+        if message.via_bot:
+            return
+
+        movie_name = (message.text or "").strip()
+
+        # Ignore unnecessary texts, buttons, or group command loops
+        if (
+            "Size :-" in movie_name
+            or "Size:" in movie_name
+            or "@CinemaVetaBot" in movie_name
+            or "@mrDuDeHoLic" in movie_name
+            or movie_name.startswith("📁")
+            or "Results -" in movie_name
+        ):
+            return
+
+        if movie_name.startswith("@"):
+            parts = movie_name.split()
+            movie_name = " ".join(parts[1:])
+
+        if movie_name.lower().startswith("/search"):
+            movie_name = movie_name[7:].strip()
+
+        if not movie_name or len(movie_name) < 2:
+            return
+
+        # Force Subscribe Verification for Group Users (if needed)
+        if not await enforce_fsub(client, message, payload=movie_name):
+            return
+
+        # Execute search directly in the group
+        await execute_search(
+            client=client,
+            user=message.from_user,
+            chat_id=message.chat.id,
+            movie_name=movie_name,
+            reply_to_message_id=message.id,
+            allow_spelling_suggestions=True
+        )
+
+    except Exception as e:
+        print(f"❌ GROUP SEARCH HANDLER ERROR : {e}", flush=True)
+
