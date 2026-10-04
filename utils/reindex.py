@@ -109,7 +109,7 @@ async def db_writer_worker(queue, files_collection):
 
 async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
     offset_id = end_id  # Start from newer message and go backwards towards start_id
-    LIMIT = 1000  # Increased limit for faster batch retrieval
+    LIMIT = 500  # Increased limit for faster batch retrieval
 
     while offset_id >= start_id:
         try:
@@ -171,7 +171,7 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
                 current_batch.append(op)
                 stats["count"] += 1
 
-            if len(current_batch) >= 5000:  # Increased batch threshold for blazing speed
+            if len(current_batch) >= 3000:  # Increased batch threshold for blazing speed
                 await queue.put(list(current_batch))
                 current_batch.clear()
 
