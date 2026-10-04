@@ -170,41 +170,55 @@ def clean_movie_base_title(raw_name: str, query: str = "") -> str:
     title = re.sub(r"[^\w\s]", "", title)
     title = re.sub(r"\s+", " ", title).strip()
 
-    if preserved_year and preserved_year not in title and len(title.split()) == 1:
-        title = f"{title} {preserved_year}"
+    # Do not auto-append year here for the distinct movie extraction logic.
+    # We will handle Name + Year pairing directly in extract_distinct_movies.
 
-    return title
+    return title.strip()
 
+# ================= DISTINCT MOVIES (NAME + YEAR SEPARATION) ================= #
 
 def extract_distinct_movies(files_list, search_query: str):
     query_norm = search_query.lower().strip()
-    raw_titles = []
+    raw_entries = {}  # { "MovieName (Year)": original_title_for_sorting }
 
     for f in files_list:
-        raw = f.get("movie_name") or f.get("file_name") or f.get("original_file_name") or ""
-        clean = clean_movie_base_title(raw, query=search_query)
-        if clean and len(clean) >= 3 and query_norm in clean.lower():
-            raw_titles.append(clean)
+        raw_name = f.get("movie_name") or f.get("file_name") or f.get("original_file_name") or ""
+        clean_title = clean_movie_base_title(raw_name, query=search_query)
+        
+        # Determine Year
+        year = str(f.get("year")).strip() if f.get("year") else ""
+        if not year or year.lower() == "unknown":
+            year_match = re.search(r"\b(19\d\d|20\d\d)\b", raw_name)
+            if year_match:
+                year = year_match.group(1)
+        
+        if clean_title and len(clean_title) >= 3 and query_norm in clean_title.lower():
+            # Format: Movie Title (Year)
+            display_title = clean_title.title()
+            if year:
+                display_title = f"{display_title} ({year})"
+            
+            raw_entries[display_title] = clean_title
 
-    distinct = []
-    for cand in sorted(raw_titles, key=len):
-        cand_lower = cand.lower().strip()
+    distinct_list = []
+    
+    # Filter out redundant substrings within the same year bracket
+    for display_title, clean_title in sorted(raw_entries.items(), key=lambda item: len(item[1])):
+        display_lower = display_title.lower()
         matched = False
-        for idx, exist in enumerate(distinct):
-            exist_lower = exist.lower().strip()
-            if cand_lower.startswith(exist_lower) or exist_lower.startswith(cand_lower):
+        
+        for exist_title in distinct_list:
+            exist_lower = exist_title.lower()
+            # If the base titles are too similar AND years match (or no year), group them
+            if (display_lower.startswith(exist_lower) or exist_lower.startswith(display_lower)) and \
+               (display_title.split("(")[-1] == exist_title.split("(")[-1]):
                 matched = True
                 break
+                
         if not matched:
-            distinct.append(cand)
+            distinct_list.append(display_title)
 
-    collapsed = []
-    for t in distinct:
-        t_clean = t.title()
-        if not any(t_clean.lower().startswith(c.lower()) and len(t_clean) > len(c) for c in collapsed):
-            collapsed.append(t_clean)
-
-    return collapsed if collapsed else [search_query.title()]
+    return distinct_list if distinct_list else [search_query.title()]
 
 
 # ================= SEARCH LOG ================= #
@@ -411,11 +425,12 @@ async def execute_search(
             if clean_name:
                 results = await search_files(clean_name)
 
-        # 2. Check if DB has genuinely multiple franchise parts
+        # 2. Check if DB has genuinely multiple franchise parts or same movie in diff years
         if results and allow_spelling_suggestions:
             distinct_db_movies = extract_distinct_movies(results, movie_name)
 
-            if len(distinct_db_movies) > 1 and not (len(distinct_db_movies) == 1 and distinct_db_movies[0].lower() == movie_name.lower()):
+            # Show selection menu if there are multiple variations (e.g., Pushpa 1 vs 2, or Tholi Prema 1998 vs 2018)
+            if len(distinct_db_movies) > 1 and not (len(distinct_db_movies) == 1 and distinct_db_movies[0].split("(")[0].strip().lower() == movie_name.lower()):
                 query_words = len(movie_name.strip().split())
                 if query_words <= 2:
                     buttons = []
@@ -496,7 +511,7 @@ async def execute_search(
                     InlineKeyboardButton("‼️ INSTRUCTIONS ‼️", callback_data="search_instructions")
                 ],
                 [
-                    InlineKeyboardButton("♻️️ GOOGLE SEARCH ♻️", url=google_search_url)
+                    InlineKeyboardButton("♻ GOOGLE SEARCH ♻️", url=google_search_url)
                 ]
             ]
 
@@ -537,8 +552,10 @@ async def execute_search(
             if l in TMDB_LANG_MAP:
                 target_lang = TMDB_LANG_MAP[l]
                 break
-
-        movie_details = await get_imdb_movie_details(movie_name, preferred_lang=target_lang)
+        
+        # Remove year in bracket from query before passing to IMDB if present
+        imdb_search_query = movie_name.split("(")[0].strip()
+        movie_details = await get_imdb_movie_details(imdb_search_query, preferred_lang=target_lang)
         landscape_banner_url = movie_details.get("image") if movie_details else None
 
         caption_lines = []
@@ -682,7 +699,7 @@ async def execute_search(
     except Exception as e:
         print(f"❌ SEARCH ERROR : {e}", flush=True)
         try:
-            await client.send_message(chat_id, "⚠️️ Something went wrong.", reply_to_message_id=reply_to_message_id)
+            await client.send_message(chat_id, "⚠ Something went wrong.", reply_to_message_id=reply_to_message_id)
         except Exception:
             pass
 
