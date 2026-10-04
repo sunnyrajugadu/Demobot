@@ -6,6 +6,7 @@ from datetime import datetime
 import uuid
 import aiohttp
 import urllib.parse
+import difflib
 
 from pyrogram import filters
 from pyrogram.types import (
@@ -27,6 +28,9 @@ from database.models import (
 
 
 print("✅ search.py imported", flush=True)
+
+# Short callback tokens keep Telegram callback_data within its 64-byte limit.
+IMDB_SELECTIONS = {}
 
 
 # ================= SETTINGS ================= #
@@ -384,24 +388,43 @@ async def execute_search(
         # If IMDB returned multiple distinct movies or variations, force "Multiple movies found" selection menu
         if imdb_suggestions and len(imdb_suggestions) > 1 and not has_explicit_year:
             suggestion_buttons = []
+            normalized_query = re.sub(r"[^a-z0-9 ]", "", base_movie_name.lower()).strip()
+            normalized_titles = [
+                re.sub(r"[^a-z0-9 ]", "", re.sub(r"\s*\(\d{4}\)\s*$", "", title).lower()).strip()
+                for title in imdb_suggestions
+            ]
+            similarity = max(
+                (difflib.SequenceMatcher(None, normalized_query, title).ratio() for title in normalized_titles),
+                default=0.0
+            )
+            is_spelling_candidate = bool(normalized_query) and similarity >= 0.72 and normalized_query not in normalized_titles
+
             for title in imdb_suggestions[:8]:
-                clean_disp = title.split("(")[0].strip() if "(" in title else title
+                token = uuid.uuid4().hex[:12]
+                IMDB_SELECTIONS[token] = title
                 display_text = title.replace("(", " - ").replace(")", "").strip()
-                cb_data = f"spell:{user_id}:{display_text[:45]}"
-                suggestion_buttons.append([InlineKeyboardButton(display_text, callback_data=cb_data)])
+                cb_data = f"spell:{user_id}:{token}"
+                suggestion_buttons.append([InlineKeyboardButton(display_text[:60], callback_data=cb_data)])
 
             suggestion_buttons.append([InlineKeyboardButton("✘ CLOSE ✘", callback_data="close")])
+            if is_spelling_candidate:
+                prompt_text = (
+                    f"`{movie_name}`\n\n"
+                    "**Spelling Mistake Bro ‼️**\n\n"
+                    "**DON'T WORRY 😊 CHOOSE THE CORRECT ONE BELOW 👇**"
+                )
+            else:
+                prompt_text = (
+                    f"🎬 **Multiple movies found for:** `{movie_name}`\n\n"
+                    "👇 **Please select which movie you want:**"
+                )
 
             prompt_msg = await client.send_message(
                 chat_id=chat_id,
-                text=(
-                    f"🎬 **Multiple movies found for:** `{movie_name}`\n\n"
-                    "👇 **Please select which movie you want:**"
-                ),
+                text=prompt_text,
                 reply_markup=InlineKeyboardMarkup(suggestion_buttons),
                 reply_to_message_id=reply_to_message_id
             )
-
             if prompt_msg:
                 asyncio.create_task(auto_delete_message(prompt_msg, delay_seconds=45))
             return
@@ -443,8 +466,10 @@ async def execute_search(
                     for title in suggestions:
                         clean_disp = title.split("(")[0].strip() if "(" in title else title
                         display_text = title.replace("(", " - ").replace(")", "").strip()
-                        cb_data = f"spell:{user_id}:{display_text[:45]}"
-                        suggestion_buttons.append([InlineKeyboardButton(display_text, callback_data=cb_data)])
+                        token = uuid.uuid4().hex[:12]
+                        IMDB_SELECTIONS[token] = title
+                        cb_data = f"spell:{user_id}:{token}"
+                        suggestion_buttons.append([InlineKeyboardButton(display_text[:60], callback_data=cb_data)])
 
                     suggestion_buttons.append([InlineKeyboardButton("✘ CLOSE ✘", callback_data="close")])
 
