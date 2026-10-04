@@ -11,7 +11,7 @@ def start_buttons(bot_username: str = None):
     Main /start and Home keyboard.
 
     Row 1:
-        ➕ Add to Group | 🔍 Search Movies
+        ➕ Add Me to Your Groups | 🔍 Search Movies
 
     Row 2:
         📢 Updates
@@ -26,7 +26,7 @@ def start_buttons(bot_username: str = None):
         [
             [
                 InlineKeyboardButton(
-                    "➕ Add to Group",
+                    "➕ Add Me to Your Groups",
                     url=add_group_url
                 ),
                 InlineKeyboardButton(
