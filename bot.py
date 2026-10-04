@@ -21,7 +21,7 @@ app = Client(
 )
 
 
-# First User client (For parallel reindexing part 1)
+# First User client (Tuned for ultra-fast parallel chunk retrieval & raw MTProto queries)
 user_app_1 = Client(
     "CinemaVetaUser1",
     api_id=API_ID,
@@ -35,7 +35,7 @@ user_app_1 = Client(
 )
 
 
-# Second User client (For parallel reindexing part 2)
+# Second User client (Tuned for ultra-fast parallel chunk retrieval & raw MTProto queries)
 user_app_2 = Client(
     "CinemaVetaUser2",
     api_id=API_ID,
@@ -47,3 +47,7 @@ user_app_2 = Client(
     no_updates=True,
     takeout=False
 )
+
+
+# Backward compatibility aliases for seamless integration across all files
+user_app = user_app_1
