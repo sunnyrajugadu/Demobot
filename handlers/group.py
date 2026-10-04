@@ -1,13 +1,11 @@
 import io
-import random
 import asyncio
 import aiohttp
 
 from pyrogram import filters
-from pyrogram.types import Message, ChatMemberUpdated, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, ChatMemberUpdated, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot import app
-from config import START_IMAGES
 
 print(
     "✅ group.py imported",
@@ -55,25 +53,6 @@ def group_start_buttons(bot_username: str = None):
     )
 
 
-async def download_image_stream(url: str) -> io.BytesIO | None:
-    """Fallback to stream into RAM if Telegram fails to download directly from the URL."""
-    try:
-        async with aiohttp.ClientSession(
-            headers=HTTP_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=2.0)
-        ) as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                    if data:
-                        bio = io.BytesIO(data)
-                        bio.name = "start_image.jpg"
-                        return bio
-    except Exception:
-        pass
-    return None
-
-
 # ============================================================
 # BOT ADDED TO GROUP WATCHER (WELCOME & ADMIN CHECK)
 # ============================================================
@@ -105,7 +84,7 @@ async def bot_added_to_group(client, chat_member_updated: ChatMemberUpdated):
 
 
 # ============================================================
-# GROUP /START COMMAND HANDLER
+# GROUP /START COMMAND HANDLER (TEXT ONLY, NO IMAGES)
 # ============================================================
 
 @app.on_message(
@@ -117,49 +96,45 @@ async def group_start_command(client, message: Message):
     bot_info = await client.get_me()
     bot_username = bot_info.username if bot_info else None
 
-    caption = (
-        f"Hello Everyone in <b>{message.chat.title}</b>.\n\n"
-        "• Search Movies & Series Here\n"
+    text = (
+        f"✦ hello everyone in <b>{message.chat.title}</b>.\n\n"
+        "• search your favorite movies & series easily right here."
     )
 
     markup = group_start_buttons(bot_username)
 
-    if not START_IMAGES:
-        return await message.reply_text(
-            text=caption,
-            reply_markup=markup,
-            quote=True
-        )
-
-    selected_url = random.choice(START_IMAGES)
-
-    try:
-        await message.reply_photo(
-            photo=selected_url,
-            caption=caption,
-            reply_markup=markup,
-            quote=True
-        )
-        return
-    except Exception:
-        pass
-
-    bio = await download_image_stream(selected_url)
-    if bio:
-        bio.seek(0)
-        try:
-            await message.reply_photo(
-                photo=bio,
-                caption=caption,
-                reply_markup=markup,
-                quote=True
-            )
-            return
-        except Exception:
-            pass
-
     await message.reply_text(
-        text=caption,
+        text=text,
         reply_markup=markup,
         quote=True
     )
+
+
+# ============================================================
+# CALLBACK QUERY HANDLER FOR GROUP HOME (PREVENTS INLINE QUERY BUG)
+# ============================================================
+
+@app.on_callback_query(filters.regex("^home_main$"))
+async def group_home_callback(client, callback_query: CallbackQuery):
+    """Handles home callback specifically for groups so it restores group buttons instead of private inline buttons."""
+    message = callback_query.message
+    if message and message.chat.type in ["group", "supergroup"]:
+        bot_info = await client.get_me()
+        bot_username = bot_info.username if bot_info else None
+
+        text = (
+            f"✦ hello everyone in <b>{message.chat.title}</b>.\n\n"
+            "• search your favorite movies & series easily right here."
+        )
+
+        markup = group_start_buttons(bot_username)
+
+        try:
+            if message.photo:
+                await message.edit_caption(caption=text, reply_markup=markup)
+            else:
+                await message.edit_text(text=text, reply_markup=markup)
+        except Exception:
+            pass
+        
+        await callback_query.answer()
