@@ -176,7 +176,7 @@ def clean_movie_base_title(raw_name: str, query: str = "") -> str:
 
 def extract_distinct_movies(files_list, search_query: str):
     query_norm = search_query.lower().strip()
-    raw_entries = {}  # { "MovieName (Year)": original_title_for_sorting }
+    raw_entries = {}  # { "MovieName - Year": original_title_for_sorting }
 
     for f in files_list:
         raw_name = f.get("movie_name") or f.get("file_name") or f.get("original_file_name") or ""
@@ -206,7 +206,6 @@ def extract_distinct_movies(files_list, search_query: str):
         
         for exist_title in distinct_list:
             exist_lower = exist_title.lower()
-            # If the base titles are too similar AND years match (or no year), group them
             if (display_lower.startswith(exist_lower) or exist_lower.startswith(display_lower)) and \
                (display_title.split("-")[-1].strip() == exist_title.split("-")[-1].strip()):
                 matched = True
@@ -464,6 +463,8 @@ async def execute_search(
                 if query_words <= 2:
                     buttons = []
                     for title in distinct_db_movies[:8]:
+                        # When user clicks a specific title from multiple selection menu, 
+                        # pass the exact title (with year/hyphen) back to execute_search recursively or directly query it
                         buttons.append([
                             InlineKeyboardButton(
                                 title,
@@ -487,6 +488,22 @@ async def execute_search(
                         asyncio.create_task(auto_delete_message(prompt_msg, delay_seconds=45))
                     return
 
+        # If a specific year-qualified title was selected (e.g. from spell callback or direct query containing hyphen),
+        # filter results to match that specific year so only that movie's files are shown.
+        if "-" in movie_name:
+            parts = movie_name.split("-")
+            base_query = parts[0].strip()
+            year_part = parts[1].strip() if len(parts) > 1 else ""
+            if year_part.isdigit():
+                filtered_results = []
+                for f in results:
+                    f_name = f.get("movie_name") or f.get("file_name") or ""
+                    f_year = str(f.get("year", ""))
+                    if year_part in f_name or year_part == f_year:
+                        filtered_results.append(f)
+                if filtered_results:
+                    results = filtered_results
+
         asyncio.create_task(
             log_search(
                 client,
@@ -503,10 +520,9 @@ async def execute_search(
                 if suggestions:
                     suggestion_buttons = []
                     for title in suggestions:
-                        # Fix for Spelling Suggestions: Keep the year (if present) and convert brackets to hyphen for clarity
                         clean_disp = title.split("(")[0].strip() if "(" in title else title
                         display_text = title.replace("(", "- ").replace(")", "").strip()
-                        cb_data = f"spell:{user_id}:{clean_disp[:45]}"
+                        cb_data = f"spell:{user_id}:{display_text[:45]}"
                         suggestion_buttons.append([InlineKeyboardButton(display_text, callback_data=cb_data)])
 
                     suggestion_buttons.append([InlineKeyboardButton("✘ CLOSE ✘", callback_data="close")])
@@ -593,8 +609,16 @@ async def execute_search(
 
         if movie_details and movie_details.get("title"):
             m_title = movie_details['title']
-            if movie_details.get("year"):
+            # If search query had a specific year, display that year in the caption title
+            if "-" in movie_name:
+                maybe_year = movie_name.split("-")[-1].strip()
+                if maybe_year.isdigit():
+                    m_title += f" - {maybe_year}"
+                elif movie_details.get("year"):
+                    m_title += f" - {movie_details['year']}"
+            elif movie_details.get("year"):
                 m_title += f" - {movie_details['year']}"
+            
             caption_lines.append(f"🎬 <b>{html.escape(m_title)}</b>\n")
         else:
             caption_lines.append(f"🎬 <b>{html.escape(movie_name.title())}</b>\n")
