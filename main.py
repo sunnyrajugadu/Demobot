@@ -99,8 +99,6 @@ async def main():
     import handlers.deep_links
     import handlers.inline
     import handlers.imdb
-    import handlers.group
-    import handlers.group_search
     
     
 

@@ -81,87 +81,7 @@ async def find_file_by_unique_id(file_unique_id):
 
 
 # ============================================================
-# /GENERATE_LINK (Deep Link Handler for PM & Group Buttons)
-# ============================================================
-
-@app.on_message(
-    filters.command("start") & filters.private
-)
-async def pm_start_handler(
-    client,
-    message: Message
-):
-    # Check if the start command contains payload (e.g., /start file_<id>)
-    if len(message.command) > 1:
-        payload = message.command[1]
-
-        if payload.startswith("file_"):
-            file_id_str = payload.replace("file_", "")
-
-            from bson import ObjectId
-            try:
-                file_obj_id = ObjectId(file_id_str)
-            except Exception:
-                return await message.reply_text(
-                    "❌ Iɴᴠᴀʟɪᴅ Fɪʟᴇ Lɪɴᴋ!"
-                )
-
-            # Fetch file from database using MongoDB _id
-            file_data = await files().find_one({"_id": file_obj_id})
-
-            if not file_data:
-                return await message.reply_text(
-                    "❌ Fɪʟᴇ Nᴏᴛ Fᴏᴜɴᴅ Oʀ Exᴘɪʀᴇᴅ!"
-                )
-
-            # Real telegram file id or message details
-            # Depending on your database model, fetch the stored telegram file_id
-            tg_file_id = (
-                file_data.get("file_id")
-                or file_data.get("media_id")
-                or file_data.get("telegram_file_id")
-            )
-
-            file_name = (
-                file_data.get("file_name")
-                or file_data.get("name")
-                or "Uɴᴋɴᴏᴡɴ Fɪʟᴇ"
-            )
-
-            file_size = format_size(
-                file_data.get("file_size")
-                or file_data.get("size")
-                or 0
-            )
-
-            if tg_file_id:
-                try:
-                    await message.reply_text(
-                        f"✨ Hᴇʀᴇ Is Yᴏᴜʀ Mᴏᴠɪᴇ Fɪʟᴇ, Eɴᴊᴏʏ! 🍿"
-                    )
-                    # Send document directly to user PM
-                    return await client.send_cached_media(
-                        chat_id=message.chat.id,
-                        file_id=tg_file_id,
-                        caption=f"<b><code>{file_name} - [{file_size}]</code></b>"
-                    )
-                except Exception as e:
-                    print(f"[pm_start_handler] Send media error: {e}", flush=True)
-
-            return await message.reply_text(
-                "❌ Sᴏʀʀʏ, Cᴏᴜʟᴅ Nᴏᴛ Sᴇɴᴅ Tʜᴇ Fɪʟᴇ."
-            )
-
-    # Normal /start message without payload
-    await message.reply_text(
-        f"👋 ʜᴇʟʟᴏ <b>{message.from_user.first_name}</b>!\n\n"
-        "🎥 • Wᴇʟᴄᴏᴍᴇ Tᴏ <b>CɪɴᴇᴍᴀVᴇᴛᴀ Gʀᴏᴜᴘ Sᴇᴀʀᴄʜ</b>. 🍿\n"
-        "⚡ • Sᴇᴀʀᴄʜ Yoᴜʀ Fᴀᴠᴏʀɪᴛᴇ Mᴏᴠɪᴇs & Sᴇʀɪᴇs Rɪɢʜᴛ Hᴇʀᴇ. 🎬"
-    )
-
-
-# ============================================================
-# /GENERATE_LINK COMMAND
+# /GENERATE_LINK
 # ============================================================
 
 @app.on_message(
@@ -311,7 +231,7 @@ async def generate_link(
 
     await message.reply_text(
 
-        f"<b><code>{file_name} - [{size_text}]</code></b>\n\n"
+        f"<b><code>{file_name} - [{size_text}]</b></code>\n\n"
         f"<code>{link}</code>"
 
     )

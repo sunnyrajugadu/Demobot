@@ -97,10 +97,6 @@ async def start_command(
     if not user:
         return
 
-    # Fetch bot username for group deep-linking buttons
-    bot_info = await client.get_me()
-    bot_username = bot_info.username if bot_info else None
-
     # 1. SEND LOADING STICKER IMMEDIATELY
     loading_msg = None
     try:
@@ -134,7 +130,7 @@ async def start_command(
                 return await message.reply_text(
                     "✅ <b>You have joined all required channels!</b>\n\n"
                     "You can now use Inline search freely.",
-                    reply_markup=start_buttons(bot_username),
+                    reply_markup=start_buttons(),
                     quote=True
                 )
 
@@ -240,7 +236,7 @@ async def start_command(
         if not START_IMAGES:
             return await message.reply_text(
                 text=caption,
-                reply_markup=start_buttons(bot_username),
+                reply_markup=start_buttons(),
                 quote=True
             )
 
@@ -251,7 +247,7 @@ async def start_command(
             await message.reply_photo(
                 photo=selected_url,
                 caption=caption,
-                reply_markup=start_buttons(bot_username),
+                reply_markup=start_buttons(),
                 quote=True
             )
             print("⚡ INSTANT CONFIG PHOTO SENT", flush=True)
@@ -267,7 +263,7 @@ async def start_command(
                 await message.reply_photo(
                     photo=bio,
                     caption=caption,
-                    reply_markup=start_buttons(bot_username),
+                    reply_markup=start_buttons(),
                     quote=True
                 )
                 print("⚡ BUFFER STREAM PHOTO SENT", flush=True)
@@ -278,7 +274,7 @@ async def start_command(
         # 3. Text fallback if image loading fails completely
         await message.reply_text(
             text=caption,
-            reply_markup=start_buttons(bot_username),
+            reply_markup=start_buttons(),
             quote=True
         )
 
