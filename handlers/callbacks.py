@@ -49,7 +49,7 @@ print(
 # SETTINGS
 # ============================================================
 
-MENU_EXPIRE_SECONDS = 300
+MENU_EXPIRE_SECONDS = 10
 
 FILES_PER_PAGE = 7
 
@@ -631,7 +631,7 @@ async def delete_send_all_later(
 
 
 # ============================================================
-# EXPIRY CHECK (DELETES MENU ON EXPIRY)
+# EXPIRY CHECK (DELETES MENU ON EXPIRY SILENTLY)
 # ============================================================
 
 async def check_expiry(query):
@@ -662,12 +662,6 @@ async def check_expiry(query):
                 > MENU_EXPIRE_SECONDS
             ):
 
-                await query.answer(
-                    "This menu has expired ⏰.\n"
-                    "Search again to get fresh files 🍿",
-                    show_alert=True
-                )
-
                 try:
 
                     await query.message.delete()
@@ -686,6 +680,7 @@ async def check_expiry(query):
         )
 
     return False
+
 
 
 # ============================================================
