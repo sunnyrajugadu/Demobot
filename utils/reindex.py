@@ -1,6 +1,5 @@
 import asyncio
 import time
-import zlib
 from datetime import datetime
 from pyrogram import raw
 from pyrogram.file_id import FileId, FileUniqueId, FileType, FileUniqueType
@@ -79,8 +78,8 @@ def fast_parse_media(doc, is_video, caption, chat_id, msg_id, msg_date):
     }
 
     # ============================================================
-    # 🔴 DB DUPLICATE CHECK FIX (Name + Size)
-    # If file_name and file_size_bytes already exist, MongoDB skips it.
+    # 🔴 DB DUPLICATE CHECK FIX (Name + Size Exact Match)
+    # Changed from upserting by file_unique_id to name+size combination
     # ============================================================
     return UpdateOne(
         {
@@ -116,7 +115,7 @@ async def db_writer_worker(queue, files_collection):
 # WORKER FOR FETCHING A SPECIFIC MESSAGE ID RANGE (PER CLIENT)
 # ============================================================
 
-async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
+async def fetch_range_worker(client, peer, start_id, end_id, queue, stats, files_collection):
     offset_id = end_id  # Start from newer message and go backwards towards start_id
     LIMIT = 500  # Increased limit for faster batch retrieval
 
@@ -167,8 +166,7 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
                 continue
 
             # ============================================================
-            # 🔴 IN-MEMORY DUPLICATE CHECK FIX (Name + Size)
-            # Extracts filename first, hashes it with size to skip repeats in the same run
+            # 🔴 STRICT EXACT DUPLICATE CHECK (Name + Size)
             # ============================================================
             temp_file_name = ""
             for attr in getattr(doc, "attributes", []):
@@ -177,11 +175,25 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
             
             temp_file_size = getattr(doc, 'size', 0) or 0
             
-            sig = zlib.crc32(f"{temp_file_name}:{temp_file_size}".encode("utf-8"))
-            if sig in stats["batch_seen"]:
+            # Using exact string match instead of crc32 hash to prevent collisions
+            exact_match_key = f"{temp_file_name}::{temp_file_size}"
+            
+            if exact_match_key in stats["batch_seen"]:
                 stats["skipped_duplicates"] += 1
                 continue
-            stats["batch_seen"].add(sig)
+            
+            # Check DB directly for extra safety before adding to queue
+            db_exists = await files_collection.find_one({
+                "file_name": temp_file_name,
+                "file_size_bytes": temp_file_size
+            }, {"_id": 1})
+            
+            if db_exists:
+                stats["batch_seen"].add(exact_match_key)
+                stats["skipped_duplicates"] += 1
+                continue
+
+            stats["batch_seen"].add(exact_match_key)
 
             caption = getattr(msg, "message", "")
             msg_date = getattr(msg, "date", None)
@@ -191,7 +203,7 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
                 current_batch.append(op)
                 stats["count"] += 1
 
-            if len(current_batch) >= 3000:  # Increased batch threshold for blazing speed
+            if len(current_batch) >= 1500:  # Slightly reduced batch threshold for stability
                 await queue.put(list(current_batch))
                 current_batch.clear()
 
@@ -289,10 +301,10 @@ async def reindex_channel(status_message=None):
 
     # Split work between user_app_1 and user_app_2 using their respective resolved peers
     worker_1 = asyncio.create_task(
-        fetch_range_worker(user_app_1, peer_1, mid_msg_id, max_msg_id, queue, stats)
+        fetch_range_worker(user_app_1, peer_1, mid_msg_id, max_msg_id, queue, stats, files_collection)
     )
     worker_2 = asyncio.create_task(
-        fetch_range_worker(user_app_2, peer_2, min_msg_id, mid_msg_id - 1, queue, stats)
+        fetch_range_worker(user_app_2, peer_2, min_msg_id, mid_msg_id - 1, queue, stats, files_collection)
     )
 
     # Background task to live-update status message every 5 seconds
