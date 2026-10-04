@@ -434,8 +434,37 @@ async def execute_search(
             )
         )
 
-        # ================= NO RESULTS FOUND ================= #
+        # ================= NO RESULTS / SPELLING MISTAKE SUGGESTIONS ================= #
         if not results:
+            if allow_spelling_suggestions:
+                suggestions = await get_imdb_suggestions(movie_name, limit=8)
+                if suggestions:
+                    suggestion_buttons = []
+                    for title in suggestions:
+                        clean_disp = title.split("(")[0].strip() if "(" in title else title
+                        display_text = title.replace("(", " - ").replace(")", "").strip()
+                        cb_data = f"spell:{user_id}:{display_text[:45]}"
+                        suggestion_buttons.append([InlineKeyboardButton(display_text, callback_data=cb_data)])
+
+                    suggestion_buttons.append([InlineKeyboardButton("✘ CLOSE ✘", callback_data="close")])
+
+                    reply_text = (
+                        f"`{movie_name}`\n\n"
+                        "**Spelling Mistake Bro ‼️**\n\n"
+                        "**DON'T WORRY 😊 CHOOSE THE CORRECT ONE BELOW 👇**"
+                    )
+
+                    spell_msg = await client.send_message(
+                        chat_id=chat_id,
+                        text=reply_text,
+                        reply_markup=InlineKeyboardMarkup(suggestion_buttons),
+                        reply_to_message_id=reply_to_message_id
+                    )
+
+                    if spell_msg:
+                        asyncio.create_task(auto_delete_message(spell_msg, delay_seconds=30))
+                    return
+
             google_query = urllib.parse.quote_plus(movie_name)
             google_search_url = f"https://www.google.com/search?q={google_query}"
 
