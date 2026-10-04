@@ -203,7 +203,7 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats, files
                 current_batch.append(op)
                 stats["count"] += 1
 
-            if len(current_batch) >= 1500:  # Slightly reduced batch threshold for stability
+            if len(current_batch) >= 3000:  # Slightly reduced batch threshold for stability
                 await queue.put(list(current_batch))
                 current_batch.clear()
 
