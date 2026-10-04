@@ -373,7 +373,7 @@ def pagination_buttons(
     if page < total_pages:
         row.append(
             InlineKeyboardButton(
-                "Next ➡️",
+                "Next ⪼",
                 callback_data=(
                     f"page:"
                     f"{search_id}:"

@@ -184,9 +184,9 @@ async def get_imdb_movie_details(query: str, preferred_lang: str = "te"):
 
                     # Primary: 16:9 Landscape Backdrop; Fallback: High-res Poster
                     if backdrop:
-                        details["image"] = f"https://image.tmdb.org/t/p/w780{backdrop}"
+                        details["image"] = f"https://image.tmdb.org/t/p/original{backdrop}"
                     elif poster:
-                        details["image"] = f"https://image.tmdb.org/t/p/w780{poster}"
+                        details["image"] = f"https://image.tmdb.org/t/p/original{poster}"
                     
                     details["title"] = title
                     details["year"] = year

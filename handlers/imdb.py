@@ -346,15 +346,11 @@ def format_release_date(value, fallback_year=None):
 
 
 def poster_high_res(url):
-    if not url:
-        return None
-    try:
-        if "_V1_" in url:
-            base = url.split("_V1_", 1)[0]
-            return f"{base}_V1_UY1200_CR0,0,800,1200_AL_.jpg"
-    except Exception:
-        pass
-    return url
+    # Keep IMDb's original poster URL exactly as provided.
+    # Do not force _V1_UY1200_CR0,0,800,1200_AL_.jpg because that
+    # can introduce white side edges/cropping compared with IMDb's
+    # original poster image.
+    return url if url else None
 
 
 def normalize_certificate(value):

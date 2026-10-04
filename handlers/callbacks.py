@@ -823,7 +823,7 @@ def pagination_buttons(
 
         row.append(
             InlineKeyboardButton(
-                "⬅️ Previous",
+                "⪻ Previous",
                 callback_data=(
                     f"page:"
                     f"{search_id}:"
@@ -844,7 +844,7 @@ def pagination_buttons(
 
         row.append(
             InlineKeyboardButton(
-                "Next ➡️",
+                "Next ⪼",
                 callback_data=(
                     f"page:"
                     f"{search_id}:"
@@ -1209,7 +1209,7 @@ async def home_about_callback(
                 '</a>\n\n'
                 "📝 ʟᴀɴɢᴜᴀɢᴇ : Python\n\n"
                 "📡 ʜᴏsᴛᴇᴅ ᴏɴ : VPS\n\n"
-                "🌟 ᴠᴇʀsɪᴏɴ : 1.0"
+                "🌟 ᴠᴇʀsɪᴏɴ : 2.0"
             )
 
             await query.message.edit_caption(
