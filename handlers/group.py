@@ -24,7 +24,7 @@ def group_start_buttons(bot_username: str = None):
     """
     Group specific start keyboard layout:
     Row 1: Add Me to Your Groups
-    Row 2: Updates | About
+    Row 2: Updates
     """
     if bot_username:
         add_group_url = f"https://t.me/{bot_username}?startgroup=true&admin=change_info+delete_messages+invite_users+pin_messages"
@@ -43,18 +43,23 @@ def group_start_buttons(bot_username: str = None):
                 InlineKeyboardButton(
                     "📢 Updates",
                     url="https://t.me/mrDuDeHoLic"
-                ),
-                InlineKeyboardButton(
-                    "☺️ About",
-                    callback_data="home_about"
                 )
             ]
         ]
     )
 
 
+async def delete_message_after_delay(message: Message, delay: int = 30):
+    """Deletes a message automatically after 30 seconds."""
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
 # ============================================================
-# BOT ADDED TO GROUP WATCHER (WELCOME & ADMIN CHECK)
+# BOT ADDED TO GROUP WATCHER (WELCOME & ADMIN CHECK - 30s DELETE)
 # ============================================================
 
 @app.on_chat_member_updated()
@@ -67,24 +72,28 @@ async def bot_added_to_group(client, chat_member_updated: ChatMemberUpdated):
             
             if new_member.status in ["administrator", "creator"]:
                 text = (
-                    f"✦ thank you for adding me to <b>{chat.title}</b>.\n\n"
-                    "i am successfully configured as an administrator. "
-                    "you can now search for movies here."
+                    f"🎉 • Tʜᴀɴᴋ Yᴏᴜ Fᴏʀ Aᴅᴅɪɴɢ Mᴇ Tᴏ <b>{chat.title}</b>!\n\n"
+                    "🔰 • I Aᴍ Sᴜᴄᴄᴇssғᴜʟʟʏ Cᴏɴғɪɢᴜʀᴇᴅ As Aɴ Aᴅᴍɪɴɪsᴛʀᴀᴛᴏʀ ✅.\n"
+                    "⚡ • Yᴏᴜ Cᴀɴ Nᴏᴡ Sᴇᴀʀᴄʜ Fᴏʀ Mᴏᴠɪᴇs Hᴇʀᴇ 🎬./n/n"
                 )
+
             else:
                 text = (
-                    f"✦ hello everyone in <b>{chat.title}</b>.\n\n"
-                    "please promote me as an administrator so i can function properly "
-                    "and help you search movies efficiently."
+                    f"🌹• Hᴇʟʟᴏ Eᴠᴇʀʏᴏɴᴇ Iɴ <b>{chat.title}</b>! 💫\n\n"
+                    "🔰 • Pʟᴇᴀsᴇ Pʀᴏᴍᴏᴛᴇ Mᴇ As Aɴ Aᴅᴍɪɴɪsᴛʀᴀᴛᴏʀ 🌞.\n"
+                    "⚡ • Sᴏ Tʜᴀᴛ I Cᴀɴ Fᴜɴᴄᴛɪᴏɴ Pʀᴏᴘᴇʀʟʏ Aɴᴅ Hᴇʟᴘ Yᴏᴜ Sᴇᴀʀᴄʜ Mᴏᴠɪᴇs Eғғɪᴄɪᴇɴᴛʟʏ🎬./n/n"
                 )
+
             
-            await client.send_message(chat.id, text)
+            sent_msg = await client.send_message(chat.id, text)
+            if sent_msg:
+                asyncio.create_task(delete_message_after_delay(sent_msg, 30))
     except Exception as e:
         print(f"[group watcher error] {e}", flush=True)
 
 
 # ============================================================
-# GROUP /START COMMAND HANDLER (TEXT ONLY, NO IMAGES)
+# GROUP /START COMMAND HANDLER (30s AUTO DELETE)
 # ============================================================
 
 @app.on_message(
@@ -97,17 +106,21 @@ async def group_start_command(client, message: Message):
     bot_username = bot_info.username if bot_info else None
 
     text = (
-        f"✦ hello everyone in <b>{message.chat.title}</b>.\n\n"
-        "• search your favorite movies & series easily right here."
+        f"🌹• Hᴇʟʟᴏ Eᴠᴇʀʏᴏɴᴇ Iɴ <b>{message.chat.title}</b>! 💫\n\n"
+        "🎥 • Wᴇʟᴄᴏᴍᴇ Tᴏ <b>CɪɴᴇᴍᴀVᴇᴛᴀ Gʀᴏᴜᴘ Sᴇᴀʀᴄʜ</b>🍿\n"
+        "⚡ • Sᴇᴀʀᴄʜ Yoᴜʀ Fᴀᴠᴏʀɪᴛᴇ Mᴏᴠɪᴇs & Sᴇʀɪᴇs Rɪɢʜᴛ Hᴇʀᴇ 🎬.\n\n"
     )
+
 
     markup = group_start_buttons(bot_username)
 
-    await message.reply_text(
+    sent_msg = await message.reply_text(
         text=text,
         reply_markup=markup,
         quote=True
     )
+    if sent_msg:
+        asyncio.create_task(delete_message_after_delay(sent_msg, 30))
 
 
 # ============================================================
@@ -123,9 +136,11 @@ async def group_home_callback(client, callback_query: CallbackQuery):
         bot_username = bot_info.username if bot_info else None
 
         text = (
-            f"✦ hello everyone in <b>{message.chat.title}</b>.\n\n"
-            "• search your favorite movies & series easily right here."
+            f"🌹• Hᴇʟʟᴏ Eᴠᴇʀʏᴏɴᴇ Iɴ <b>{message.chat.title}</b>! 💫\n\n"
+            "🎥 • Wᴇʟᴄᴏᴍᴇ Tᴏ <b>CɪɴᴇᴍᴀVᴇᴛᴀ Gʀᴏᴜᴘ Sᴇᴀʀᴄʜ</b>🍿\n"
+            "⚡ • Sᴇᴀʀᴄʜ Yoᴜʀ Fᴀᴠᴏʀɪᴛᴇ Mᴏᴠɪᴇs & Sᴇʀɪᴇs Rɪɢʜᴛ Hᴇʀᴇ 🎬. \n\n"
         )
+
 
         markup = group_start_buttons(bot_username)
 
