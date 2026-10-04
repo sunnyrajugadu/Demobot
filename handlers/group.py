@@ -90,7 +90,7 @@ async def bot_added_to_group(client, chat_member_updated: ChatMemberUpdated):
                 text = (
                     f"✦ thank you for adding me to <b>{chat.title}</b>.\n\n"
                     "i am successfully configured as an administrator. "
-                    "you can now search for movies here using inline mode."
+                    "you can now search for movies here."
                 )
             else:
                 text = (
@@ -118,10 +118,8 @@ async def group_start_command(client, message: Message):
     bot_username = bot_info.username if bot_info else None
 
     caption = (
-        f"✦ <b>cinemaveta assistant</b>\n\n"
-        f"hello everyone in <b>{message.chat.title}</b>.\n\n"
-        "• search movies & series instantly using inline mode.\n"
-        "• type the movie name or use buttons below."
+        f"Hello Everyone in <b>{message.chat.title}</b>.\n\n"
+        "• Search Movies & Series Here\n"
     )
 
     markup = group_start_buttons(bot_username)
