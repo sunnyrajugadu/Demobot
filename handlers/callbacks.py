@@ -2597,6 +2597,19 @@ async def spelling_suggestion_callback(
         selected_movie = str(
             selected_movie
         ).strip()
+        # Remove special characters/symbols
+        # Keep only letters, numbers and spaces
+        selected_movie = re.sub(
+            r"[^A-Za-z0-9\s]",
+            " ",
+            selected_movie
+        )
+        # Remove extra spaces 
+        selected_movie = re.sub(
+            r"\s+",
+            " ",
+            selected_movie
+        ).strip()
 
         # ====================================================
         # REMOVE USED TOKEN
