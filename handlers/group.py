@@ -74,14 +74,14 @@ async def bot_added_to_group(client, chat_member_updated: ChatMemberUpdated):
                 text = (
                     f"🎉 • Tʜᴀɴᴋ Yᴏᴜ Fᴏʀ Aᴅᴅɪɴɢ Mᴇ Tᴏ <b>{chat.title}</b>!\n\n"
                     "🔰 • I Aᴍ Sᴜᴄᴄᴇssғᴜʟʟʏ Cᴏɴғɪɢᴜʀᴇᴅ As Aɴ Aᴅᴍɪɴɪsᴛʀᴀᴛᴏʀ ✅.\n"
-                    "⚡ • Yᴏᴜ Cᴀɴ Nᴏᴡ Sᴇᴀʀᴄʜ Fᴏʀ Mᴏᴠɪᴇs Hᴇʀᴇ 🎬./n/n"
+                    "⚡ • Yᴏᴜ Cᴀɴ Nᴏᴡ Sᴇᴀʀᴄʜ Fᴏʀ Mᴏᴠɪᴇs Hᴇʀᴇ 🎬."
                 )
 
             else:
                 text = (
                     f"🌹• Hᴇʟʟᴏ Eᴠᴇʀʏᴏɴᴇ Iɴ <b>{chat.title}</b>! 💫\n\n"
                     "🔰 • Pʟᴇᴀsᴇ Pʀᴏᴍᴏᴛᴇ Mᴇ As Aɴ Aᴅᴍɪɴɪsᴛʀᴀᴛᴏʀ 🌞.\n"
-                    "⚡ • Sᴏ Tʜᴀᴛ I Cᴀɴ Fᴜɴᴄᴛɪᴏɴ Pʀᴏᴘᴇʀʟʏ Aɴᴅ Hᴇʟᴘ Yᴏᴜ Sᴇᴀʀᴄʜ Mᴏᴠɪᴇs Eғғɪᴄɪᴇɴᴛʟʏ🎬./n/n"
+                    "⚡ • Sᴏ Tʜᴀᴛ I Cᴀɴ Fᴜɴᴄᴛɪᴏɴ Pʀᴏᴘᴇʀʟʏ Aɴᴅ Hᴇʟᴘ Yᴏᴜ Sᴇᴀʀᴄʜ Mᴏᴠɪᴇs Eғғɪᴄɪᴇɴᴛʟʏ🎬."
                 )
 
             
