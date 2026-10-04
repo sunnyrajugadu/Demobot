@@ -109,7 +109,7 @@ async def db_writer_worker(queue, files_collection):
 
 async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
     offset_id = end_id  # Start from newer message and go backwards towards start_id
-    LIMIT = 500  # Increased limit for faster batch retrieval
+    LIMIT = 1000  # Increased limit for faster batch retrieval
 
     while offset_id >= start_id:
         try:
@@ -171,7 +171,7 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
                 current_batch.append(op)
                 stats["count"] += 1
 
-            if len(current_batch) >= 3000:  # Increased batch threshold for blazing speed
+            if len(current_batch) >= 5000:  # Increased batch threshold for blazing speed
                 await queue.put(list(current_batch))
                 current_batch.clear()
 
@@ -310,14 +310,12 @@ async def reindex_channel(status_message=None):
     total_time = max(round(time.time() - start_time, 2), 0.1)
     avg_speed = int(stats["count"] / total_time)
 
-    current_date_str = datetime.now().strftime("%d-%m-%Y %I:%M:%S %p")
     final_text = (
         f"✅ <b>Ultra-Optimized 2-Session Reindex Finished!</b> ⚡\n\n"
         f"📁 <b>Total Indexed:</b> <code>{stats['count']:,}</code>\n"
         f"⚠️ <b>Duplicates Filtered:</b> <code>{stats['skipped_duplicates']:,}</code>\n"
         f"⏱ <b>Time Taken:</b> <code>{total_time}s</code>\n"
-        f"🚀 <b>Throughput:</b> <code>~{avg_speed:,} files/sec</code>\n"
-        f"⏰ {current_date_str}"
+        f"🚀 <b>Throughput:</b> <code>~{avg_speed:,} files/sec</code>"
     )
 
     if status_message:
