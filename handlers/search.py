@@ -408,7 +408,39 @@ async def execute_search(
     allow_spelling_suggestions=True
 ):
     start_time = time.time()
+    loading_msg = None
+
     try:
+        # ========================================================
+        # 1. SEND REACTION TO USER'S MESSAGE & SHOW LOADING TEXT
+        # ========================================================
+        try:
+            from config import BOT_TOKEN
+            reaction_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
+            reaction_payload = {
+                "chat_id": chat_id,
+                "message_id": reply_to_message_id,
+                "reaction": [{"type": "emoji", "emoji": "⚡"}],
+                "is_big": True
+            }
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2.0)) as session:
+                await session.post(reaction_url, json=reaction_payload)
+        except Exception:
+            pass
+
+        try:
+            loading_msg = await client.send_message(
+                chat_id=chat_id,
+                text=f"**🔎 S E A R C H I N G** `{movie_name}` **. . .**",
+                reply_to_message_id=reply_to_message_id
+            )
+        except Exception:
+            pass
+
+        # Give 1.5 seconds for the reaction animation to pop up fully
+        await asyncio.sleep(1.5)
+        # ========================================================
+
         user_id = user.id
         print(f"🔍 SEARCH : {movie_name}", flush=True)
 
@@ -426,7 +458,7 @@ async def execute_search(
         if results and allow_spelling_suggestions:
             distinct_db_movies = extract_distinct_movies(results, movie_name)
 
-            # Show selection menu if there are multiple variations (e.g., Pushpa 1 vs 2, or Tholi Prema 1998 vs 2018)
+            # Show selection menu if there are multiple variations
             if len(distinct_db_movies) > 1 and not (len(distinct_db_movies) == 1 and distinct_db_movies[0].split("(")[0].strip().lower() == movie_name.lower()):
                 query_words = len(movie_name.strip().split())
                 if query_words <= 2:
@@ -699,6 +731,16 @@ async def execute_search(
             await client.send_message(chat_id, "⚠ Something went wrong.", reply_to_message_id=reply_to_message_id)
         except Exception:
             pass
+            
+    finally:
+        # ====================================================
+        # DELETE THE LOADING MESSAGE ONCE EVERYTHING IS DONE
+        # ====================================================
+        if loading_msg:
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
 
 
 # ================= PRIVATE TEXT & SEARCH HANDLER ================= #
