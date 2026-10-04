@@ -170,9 +170,6 @@ def clean_movie_base_title(raw_name: str, query: str = "") -> str:
     title = re.sub(r"[^\w\s]", "", title)
     title = re.sub(r"\s+", " ", title).strip()
 
-    # Do not auto-append year here for the distinct movie extraction logic.
-    # We will handle Name + Year pairing directly in extract_distinct_movies.
-
     return title.strip()
 
 # ================= DISTINCT MOVIES (NAME + YEAR SEPARATION) ================= #
@@ -474,9 +471,9 @@ async def execute_search(
                 if suggestions:
                     suggestion_buttons = []
                     for title in suggestions:
-                        clean_disp = title.split("(")[0].strip() if "(" in title else title
-                        cb_data = f"spell:{user_id}:{clean_disp[:45]}"
-                        suggestion_buttons.append([InlineKeyboardButton(clean_disp, callback_data=cb_data)])
+                        # Fix for Spelling Suggestions: Keep the year (if present) for clarity
+                        cb_data = f"spell:{user_id}:{title[:45]}"
+                        suggestion_buttons.append([InlineKeyboardButton(title, callback_data=cb_data)])
 
                     suggestion_buttons.append([InlineKeyboardButton("✘ CLOSE ✘", callback_data="close")])
 
