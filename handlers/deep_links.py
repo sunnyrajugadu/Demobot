@@ -235,9 +235,3 @@ async def generate_link(
         f"<code>{link}</code>"
 
     )
-
-
-    print(
-        f"✅ Link generated: {file_name} [{size_text}]",
-        flush=True
-    )
