@@ -1,6 +1,6 @@
 import asyncio
 import time
-from pyrogram import filters, errors
+from pyrogram import filters
 from pyrogram.types import Message
 
 from bot import app
@@ -13,7 +13,6 @@ from utils.rename import (
 )
 from utils.metadata import extract_metadata
 from utils.detectors import detect_languages
-from utils.logger import send_log
 from utils.reindex import reindex_channel
 
 print("✅ indexer.py imported", flush=True)
@@ -33,42 +32,6 @@ is_owner_filter = filters.create(owner_check)
 
 
 # ============================================================
-# BACKGROUND BATCH LOGGER QUEUE
-# ============================================================
-
-log_queue = asyncio.Queue(maxsize=1000)
-is_worker_running = False
-worker_lock = asyncio.Lock()
-
-
-async def log_worker():
-    """Background worker to send logs sequentially without hitting Telegram rate limits."""
-    global is_worker_running
-    async with worker_lock:
-        is_worker_running = True
-        try:
-            while not log_queue.empty():
-                log_text = await log_queue.get()
-                sent = False
-
-                while not sent:
-                    try:
-                        await send_log(log_text)
-                        sent = True
-                        await asyncio.sleep(2.0)
-                    except errors.FloodWait as fw:
-                        print(f"⚠️ Telegram FloodWait in Logger: Sleeping {fw.value}s", flush=True)
-                        await asyncio.sleep(fw.value)
-                    except Exception as log_err:
-                        print(f"⚠️ Log Worker Error: {log_err}", flush=True)
-                        sent = True
-
-                log_queue.task_done()
-        finally:
-            is_worker_running = False
-
-
-# ============================================================
 # MANUAL REINDEX COMMAND (OWNER ONLY)
 # ============================================================
 
@@ -79,24 +42,21 @@ async def manual_reindex_handler(client, message: Message):
     global is_reindexing
 
     if is_reindexing:
-        await message.reply_text("⚠️ <b>Reindex is already running!</b> Please wait until it completes.")
         return
 
     is_reindexing = True
     status_msg = await message.reply_text("⚡ <b>Starting Parallel Chunk Reindex...</b>")
 
     try:
-        total_indexed = await reindex_channel(status_message=status_msg)
-        print(f"✅ Reindex finished with {total_indexed} items.", flush=True)
-    except Exception as e:
-        print(f"❌ Reindex failed: {e}", flush=True)
-        await status_msg.edit_text(f"❌ <b>Reindex Failed:</b> <code>{e}</code>")
+        await reindex_channel(status_message=status_msg)
+    except Exception:
+        pass
     finally:
         is_reindexing = False
 
 
 # ============================================================
-# AUTO INDEX (FOR REAL-TIME STORAGE CHANNEL UPLOADS)
+# AUTO INDEX (SILENT REAL-TIME STORAGE CHANNEL UPLOADS)
 # ============================================================
 
 @app.on_message(
@@ -107,9 +67,6 @@ async def auto_index(
     client,
     message: Message
 ):
-    global is_worker_running
-    original_name = "Unknown"
-
     try:
         # ====================================================
         # GET MEDIA
@@ -247,52 +204,10 @@ async def auto_index(
         }
 
         # ====================================================
-        # SAVE TO DATABASE
+        # SAVE TO DATABASE SILENTLY
         # ====================================================
 
-        is_saved = await save_file(data)
-        langs_str = ", ".join(final_languages)
+        await save_file(data)
 
-        if not is_saved:
-            print(f"⚠️ Skipped Duplicate: {renamed_file} (Size: {file_size} bytes)", flush=True)
-            dup_log_msg = (
-                f"⚠️ <b>Duplicate File Skipped</b>\n\n"
-                f"📄 <b>File Name:</b> <code>{renamed_file}</code>\n"
-                f"📦 <b>Size:</b> <code>{file_size} bytes</code>\n"
-                f"ℹ️ <i>Same file already exists in database.</i>"
-            )
-            try:
-                log_queue.put_nowait(dup_log_msg)
-            except asyncio.QueueFull:
-                pass
-            return
-
-        log_msg = (
-            f"✅ <b>New File Indexed</b>\n\n"
-            f"📄 <b>Original:</b> <code>{original_name}</code>\n"
-            f"🎬 <b>Changed Name:</b> <code>{renamed_file}</code>\n"
-            f"🗣 <b>Languages:</b> <code>{langs_str}</code>\n"
-            f"📝 <b>Caption:</b> <code>{caption if caption else 'No Caption'}</code>"
-        )
-        try:
-            log_queue.put_nowait(log_msg)
-        except asyncio.QueueFull:
-            pass
-
-        print(f"✅ Indexed: {renamed_file} | Languages: {langs_str}", flush=True)
-
-    except Exception as e:
-        print(f"❌ Index Error: {e}", flush=True)
-        error_log = (
-            f"❌ <b>Index Failed</b>\n\n"
-            f"📄 <b>File:</b> <code>{original_name}</code>\n"
-            f"⚠️ <b>Error:</b> <code>{type(e).__name__}: {e}</code>"
-        )
-        try:
-            log_queue.put_nowait(error_log)
-        except asyncio.QueueFull:
-            pass
-
-    finally:
-        if not is_worker_running and not log_queue.empty():
-            asyncio.create_task(log_worker())
+    except Exception:
+        pass
