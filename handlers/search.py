@@ -134,89 +134,6 @@ def get_file_display_name(file):
     return "Movie"
 
 
-# ================= SMART MOVIE NAME CLEANER ================= #
-
-def clean_movie_base_title(raw_name: str, query: str = "") -> str:
-    from utils.rename import clean_file_name
-
-    title = clean_file_name(raw_name)
-
-    # 1. Strip URLs & domains
-    title = re.sub(r"https?://\S+|www\.\S+|\b[a-zA-Z0-9_\-\.]+\.(com|org|net|in|top|click|link|xyz|site|fun|lol)\b", "", title, flags=re.IGNORECASE)
-
-    # 2. Strip telegram channel handles & prefixes
-    if query:
-        q_clean = query.strip()
-        match = re.search(re.escape(q_clean), title, flags=re.IGNORECASE)
-        if match and match.start() > 0:
-            title = title[match.start():]
-
-    # Preserve release year
-    year_match = re.search(r"\b(19\d\d|20\d\d)\b", title)
-    preserved_year = year_match.group(1) if year_match else ""
-
-    # 3. Strip all prints, resolutions, audios, codecs and tech flags
-    tech_patterns = r"\b(20\d\d|19\d\d|720p|1080p|480p|2160p|4k|hq|prehd|hdrip|webrip|web-dl|web|dvdrip|cam|camrip|hdtc|hevc|x264|x265|aac|ac3|ddp|esub|sub|vers?|hdr|truehd|remux|avc)\b.*"
-    title = re.sub(tech_patterns, "", title, flags=re.IGNORECASE)
-
-    # 4. Strip languages from tail
-    title = re.sub(r"\b(telugu|tamil|hindi|english|malayalam|kannada|multi|dual\s*audio)\b", "", title, flags=re.IGNORECASE)
-
-    # 5. Clean trailing isolated letters/tags
-    title = re.sub(r"\b(h|x|x2|aa|he|v1|v2|org|hq)\b", "", title, flags=re.IGNORECASE)
-
-    # 6. Normalize punctuation and spaces
-    title = re.sub(r"[_.\-+:]+", " ", title)
-    title = re.sub(r"[^\w\s]", "", title)
-    title = re.sub(r"\s+", " ", title).strip()
-
-    return title.strip()
-
-# ================= DISTINCT MOVIES (NAME + YEAR SEPARATION) ================= #
-
-def extract_distinct_movies(files_list, search_query: str):
-    query_norm = search_query.lower().strip()
-    raw_entries = {}  # { "MovieName - Year": original_title_for_sorting }
-
-    for f in files_list:
-        raw_name = f.get("movie_name") or f.get("file_name") or f.get("original_file_name") or ""
-        clean_title = clean_movie_base_title(raw_name, query=search_query)
-        
-        # Determine Year
-        year = str(f.get("year")).strip() if f.get("year") else ""
-        if not year or year.lower() == "unknown":
-            year_match = re.search(r"\b(19\d\d|20\d\d)\b", raw_name)
-            if year_match:
-                year = year_match.group(1)
-        
-        if clean_title and len(clean_title) >= 3 and query_norm in clean_title.lower():
-            # Format: Movie Title - Year
-            display_title = clean_title.title()
-            if year:
-                display_title = f"{display_title} - {year}"
-            
-            raw_entries[display_title] = clean_title
-
-    distinct_list = []
-    
-    # Filter out redundant substrings within the same year bracket
-    for display_title, clean_title in sorted(raw_entries.items(), key=lambda item: len(item[1])):
-        display_lower = display_title.lower()
-        matched = False
-        
-        for exist_title in distinct_list:
-            exist_lower = exist_title.lower()
-            if (display_lower.startswith(exist_lower) or exist_lower.startswith(display_lower)) and \
-               (display_title.split("-")[-1].strip() == exist_title.split("-")[-1].strip()):
-                matched = True
-                break
-                
-        if not matched:
-            distinct_list.append(display_title)
-
-    return distinct_list if distinct_list else [search_query.title()]
-
-
 # ================= SEARCH LOG ================= #
 
 async def log_search(
@@ -445,7 +362,51 @@ async def execute_search(
 
         asyncio.create_task(increase_search_count(user_id))
 
-        # 1. Search database
+        # Check if query already has a year formatted like "Movie Name - Year"
+        has_explicit_year = False
+        target_year = None
+        base_movie_name = movie_name
+        if "-" in movie_name:
+            parts = movie_name.split("-")
+            potential_year = parts[-1].strip()
+            if potential_year.isdigit() and len(potential_year) == 4:
+                has_explicit_year = True
+                target_year = potential_year
+                base_movie_name = "-".join(parts[:-1]).strip()
+
+        # ========================================================
+        # STEP 1: FETCH IMDB SUGGESTIONS / MULTIPLE MOVIES FIRST
+        # ========================================================
+        imdb_suggestions = []
+        if allow_spelling_suggestions and not has_explicit_year:
+            imdb_suggestions = await get_imdb_suggestions(base_movie_name, limit=8)
+
+        # If IMDB returned multiple distinct movies or variations, force "Multiple movies found" selection menu
+        if imdb_suggestions and len(imdb_suggestions) > 1 and not has_explicit_year:
+            suggestion_buttons = []
+            for title in imdb_suggestions[:8]:
+                clean_disp = title.split("(")[0].strip() if "(" in title else title
+                display_text = title.replace("(", " - ").replace(")", "").strip()
+                cb_data = f"spell:{user_id}:{display_text[:45]}"
+                suggestion_buttons.append([InlineKeyboardButton(display_text, callback_data=cb_data)])
+
+            suggestion_buttons.append([InlineKeyboardButton("✘ CLOSE ✘", callback_data="close")])
+
+            prompt_msg = await client.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"🎬 **Multiple movies found for:** `{movie_name}`\n\n"
+                    "👇 **Please select which movie you want:**"
+                ),
+                reply_markup=InlineKeyboardMarkup(suggestion_buttons),
+                reply_to_message_id=reply_to_message_id
+            )
+
+            if prompt_msg:
+                asyncio.create_task(auto_delete_message(prompt_msg, delay_seconds=45))
+            return
+
+        # 2. Search database based on query
         results = await search_files(movie_name)
 
         if not results and "-" in movie_name:
@@ -453,56 +414,16 @@ async def execute_search(
             if clean_name:
                 results = await search_files(clean_name)
 
-        # 2. Check if DB has genuinely multiple franchise parts or same movie in diff years
-        if results and allow_spelling_suggestions:
-            distinct_db_movies = extract_distinct_movies(results, movie_name)
-
-            # Show selection menu if there are multiple variations
-            if len(distinct_db_movies) > 1 and not (len(distinct_db_movies) == 1 and distinct_db_movies[0].split("-")[0].strip().lower() == movie_name.lower()):
-                query_words = len(movie_name.strip().split())
-                if query_words <= 2:
-                    buttons = []
-                    for title in distinct_db_movies[:8]:
-                        # When user clicks a specific title from multiple selection menu, 
-                        # pass the exact title (with year/hyphen) back to execute_search recursively or directly query it
-                        buttons.append([
-                            InlineKeyboardButton(
-                                title,
-                                callback_data=f"spell:{user_id}:{title[:45]}"
-                            )
-                        ])
-
-                    buttons.append([InlineKeyboardButton("✘ CLOSE ✘", callback_data="close")])
-
-                    prompt_msg = await client.send_message(
-                        chat_id=chat_id,
-                        text=(
-                            f"🎬 **Multiple movies found for:** `{movie_name}`\n\n"
-                            "👇 **Please select which movie you want:**"
-                        ),
-                        reply_markup=InlineKeyboardMarkup(buttons),
-                        reply_to_message_id=reply_to_message_id
-                    )
-
-                    if prompt_msg:
-                        asyncio.create_task(auto_delete_message(prompt_msg, delay_seconds=45))
-                    return
-
-        # If a specific year-qualified title was selected (e.g. from spell callback or direct query containing hyphen),
-        # filter results to match that specific year so only that movie's files are shown.
-        if "-" in movie_name:
-            parts = movie_name.split("-")
-            base_query = parts[0].strip()
-            year_part = parts[1].strip() if len(parts) > 1 else ""
-            if year_part.isdigit():
-                filtered_results = []
-                for f in results:
-                    f_name = f.get("movie_name") or f.get("file_name") or ""
-                    f_year = str(f.get("year", ""))
-                    if year_part in f_name or year_part == f_year:
-                        filtered_results.append(f)
-                if filtered_results:
-                    results = filtered_results
+        # If user selected a specific year-qualified title, filter results strictly for that year
+        if has_explicit_year and target_year:
+            filtered_results = []
+            for f in results:
+                f_name = f.get("movie_name") or f.get("file_name") or ""
+                f_year = str(f.get("year", ""))
+                if target_year in f_name or target_year == f_year:
+                    filtered_results.append(f)
+            if filtered_results:
+                results = filtered_results
 
         asyncio.create_task(
             log_search(
@@ -513,37 +434,8 @@ async def execute_search(
             )
         )
 
-        # ================= NO RESULTS / SPELLING SUGGESTIONS ================= #
+        # ================= NO RESULTS FOUND ================= #
         if not results:
-            if allow_spelling_suggestions:
-                suggestions = await get_imdb_suggestions(movie_name, limit=8)
-                if suggestions:
-                    suggestion_buttons = []
-                    for title in suggestions:
-                        clean_disp = title.split("(")[0].strip() if "(" in title else title
-                        display_text = title.replace("(", "- ").replace(")", "").strip()
-                        cb_data = f"spell:{user_id}:{display_text[:45]}"
-                        suggestion_buttons.append([InlineKeyboardButton(display_text, callback_data=cb_data)])
-
-                    suggestion_buttons.append([InlineKeyboardButton("✘ CLOSE ✘", callback_data="close")])
-
-                    reply_text = (
-                        f"`{movie_name}`\n\n"
-                        "**Spelling Mistake Bro ‼️**\n\n"
-                        "**DON'T WORRY 😊 CHOOSE THE CORRECT ONE BELOW 👇**"
-                    )
-
-                    spell_msg = await client.send_message(
-                        chat_id=chat_id,
-                        text=reply_text,
-                        reply_markup=InlineKeyboardMarkup(suggestion_buttons),
-                        reply_to_message_id=reply_to_message_id
-                    )
-
-                    if spell_msg:
-                        asyncio.create_task(auto_delete_message(spell_msg, delay_seconds=30))
-                    return
-
             google_query = urllib.parse.quote_plus(movie_name)
             google_search_url = f"https://www.google.com/search?q={google_query}"
 
@@ -600,8 +492,7 @@ async def execute_search(
                 target_lang = TMDB_LANG_MAP[l]
                 break
         
-        # Remove year after hyphen from query before passing to IMDB if present
-        imdb_search_query = movie_name.split("-")[0].strip()
+        imdb_search_query = base_movie_name.split("-")[0].strip()
         movie_details = await get_imdb_movie_details(imdb_search_query, preferred_lang=target_lang)
         landscape_banner_url = movie_details.get("image") if movie_details else None
 
@@ -609,13 +500,8 @@ async def execute_search(
 
         if movie_details and movie_details.get("title"):
             m_title = movie_details['title']
-            # If search query had a specific year, display that year in the caption title
-            if "-" in movie_name:
-                maybe_year = movie_name.split("-")[-1].strip()
-                if maybe_year.isdigit():
-                    m_title += f" - {maybe_year}"
-                elif movie_details.get("year"):
-                    m_title += f" - {movie_details['year']}"
+            if has_explicit_year and target_year:
+                m_title += f" - {target_year}"
             elif movie_details.get("year"):
                 m_title += f" - {movie_details['year']}"
             
