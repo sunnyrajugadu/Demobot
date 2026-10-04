@@ -212,18 +212,20 @@ async def reindex_channel(status_message=None):
     )
 
     try:
-        peer = await user_app_1.resolve_peer(STORAGE_CHANNEL_ID)
+        # Resolve peers independently for both clients to avoid CHANNEL_INVALID errors
+        peer_1 = await user_app_1.resolve_peer(STORAGE_CHANNEL_ID)
+        peer_2 = await user_app_2.resolve_peer(STORAGE_CHANNEL_ID)
         chat = await user_app_1.get_chat(STORAGE_CHANNEL_ID)
         print(f"✅ Channel connected: {chat.title}", flush=True)
     except Exception as e:
         print(f"❌ Storage channel error: {e}", flush=True)
         raise
 
-    # Fetch latest message ID to determine channel range
+    # Fetch latest message ID to determine channel range using user_app_1 and peer_1
     try:
         latest_history = await user_app_1.invoke(
             raw.functions.messages.GetHistory(
-                peer=peer,
+                peer=peer_1,
                 offset_id=0,
                 offset_date=0,
                 add_offset=0,
@@ -265,14 +267,12 @@ async def reindex_channel(status_message=None):
     start_time = time.time()
     last_status_update = time.time()
 
-    # Split work between user_app_1 and user_app_2
-    # Client 1 handles newer half (max_msg_id down to mid_msg_id)
-    # Client 2 handles older half (mid_msg_id - 1 down to min_msg_id)
+    # Split work between user_app_1 and user_app_2 using their respective resolved peers
     worker_1 = asyncio.create_task(
-        fetch_range_worker(user_app_1, peer, mid_msg_id, max_msg_id, queue, stats)
+        fetch_range_worker(user_app_1, peer_1, mid_msg_id, max_msg_id, queue, stats)
     )
     worker_2 = asyncio.create_task(
-        fetch_range_worker(user_app_2, peer, min_msg_id, mid_msg_id - 1, queue, stats)
+        fetch_range_worker(user_app_2, peer_2, min_msg_id, mid_msg_id - 1, queue, stats)
     )
 
     # Background task to live-update status message every 5 seconds
