@@ -28,8 +28,19 @@ BOT_TOKEN = get_env(
 )
 
 
-# User session (ONLY for reindex)
+# User sessions for ultra-fast parallel reindexing (2 user accounts)
 
+USER_SESSION_1 = get_env(
+    "USER_SESSION_1",
+    required=False
+)
+
+USER_SESSION_2 = get_env(
+    "USER_SESSION_2",
+    required=False
+)
+
+# Backward compatibility fallback if someone uses single USER_SESSION
 USER_SESSION = get_env(
     "USER_SESSION",
     required=False
@@ -114,9 +125,6 @@ STATS_VIDEO = "https://www.image2url.com/r2/default/videos/1789457566226-54a7580
 
 # ================= USAGE VIDEO ================= #
 USAGE_VIDEO = "https://www.image2url.com/r2/default/videos/1789457566226-54a75803-7c40-4972-8a95-c9b3ed87a538.mp4"  
-
-
-
 
 
 # ================= OWNER ================= #
