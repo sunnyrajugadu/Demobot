@@ -7,12 +7,12 @@ from pyrogram.file_id import FileId, FileUniqueId, FileType, FileUniqueType
 from pyrogram.errors import FloodWait
 from config import STORAGE_CHANNEL_ID
 import database as db
-from bot import user_app
+from bot import user_app_1, user_app_2
 from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
 from utils.logger import send_log
 
-print("✅ reindex.py (Full Complete Media Engine) imported", flush=True)
+print("✅ reindex.py (2-User Sessions Parallel Fast Media Engine) imported", flush=True)
 
 
 # ============================================================
@@ -104,152 +104,212 @@ async def db_writer_worker(queue, files_collection):
 
 
 # ============================================================
-# COMPLETE STREAM REINDEX RUNNER
+# WORKER FOR FETCHING A SPECIFIC MESSAGE ID RANGE (PER CLIENT)
+# ============================================================
+
+async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
+    offset_id = start_id
+    LIMIT = 100
+
+    while offset_id <= end_id:
+        try:
+            history = await client.invoke(
+                raw.functions.messages.GetHistory(
+                    peer=peer,
+                    offset_id=offset_id,
+                    offset_date=0,
+                    add_offset=0,
+                    limit=LIMIT,
+                    max_id=0,
+                    min_id=0,
+                    hash=0
+                )
+            )
+        except FloodWait as fw:
+            print(f"⚠️ FloodWait on client: Sleeping {fw.value}s", flush=True)
+            await asyncio.sleep(fw.value + 1)
+            continue
+        except Exception as req_err:
+            print(f"⚠️ Network retry error: {req_err}", flush=True)
+            await asyncio.sleep(1)
+            continue
+
+        raw_messages = getattr(history, "messages", [])
+        if not raw_messages:
+            break
+
+        # Move offset forward to older messages
+        offset_id = raw_messages[-1].id
+
+        current_batch = []
+        for msg in raw_messages:
+            # Stop if we cross the partition end boundary
+            if msg.id > end_id:
+                continue
+
+            if not hasattr(msg, "media") or not msg.media:
+                continue
+
+            media = msg.media
+            doc = getattr(media, "document", None)
+            is_video = False
+
+            if not doc and hasattr(media, "video"):
+                doc = getattr(media, "video", None)
+                is_video = True
+
+            if not doc:
+                continue
+
+            sig = zlib.crc32(f"{doc.id}:{getattr(doc, 'size', 0)}".encode("utf-8"))
+            if sig in stats["batch_seen"]:
+                stats["skipped_duplicates"] += 1
+                continue
+            stats["batch_seen"].add(sig)
+
+            caption = getattr(msg, "message", "")
+            msg_date = getattr(msg, "date", None)
+
+            op = fast_parse_media(doc, is_video, caption, STORAGE_CHANNEL_ID, msg.id, msg_date)
+            if op:
+                current_batch.append(op)
+                stats["count"] += 1
+
+            if len(current_batch) >= 1500:
+                await queue.put(list(current_batch))
+                current_batch.clear()
+
+        if current_batch:
+            await queue.put(list(current_batch))
+            current_batch.clear()
+
+        # Break if we reached or passed the start_id boundary towards older IDs
+        if raw_messages[-1].id <= start_id:
+            break
+
+        await asyncio.sleep(0)
+
+
+# ============================================================
+# COMPLETE 2-SESSION PARALLEL STREAM REINDEX RUNNER
 # ============================================================
 
 async def reindex_channel(status_message=None):
-    if not user_app:
-        raise Exception("USER_SESSION missing. User session is required.")
+    if not user_app_1 or not user_app_2:
+        raise Exception("Both USER_SESSION_1 and USER_SESSION_2 are required for parallel reindexing.")
 
-    print("⚡ Starting Full Complete Reindex...", flush=True)
+    print("⚡ Starting Ultra-Fast 2-Session Parallel Reindex...", flush=True)
 
     await send_log(
         """
-⚡ <b>Full Complete Reindex Started</b>
-🚀 Scanning 100% Messages (Documents + Videos)...
+⚡ <b>Ultra-Fast 2-Session Parallel Reindex Started</b>
+🚀 Scanning Channel using 2 User Accounts simultaneously...
 """
     )
 
     try:
-        peer = await user_app.resolve_peer(STORAGE_CHANNEL_ID)
-        chat = await user_app.get_chat(STORAGE_CHANNEL_ID)
+        peer = await user_app_1.resolve_peer(STORAGE_CHANNEL_ID)
+        chat = await user_app_1.get_chat(STORAGE_CHANNEL_ID)
         print(f"✅ Channel connected: {chat.title}", flush=True)
     except Exception as e:
         print(f"❌ Storage channel error: {e}", flush=True)
         raise
 
-    files_collection = db.get_collection("files")
-    queue = asyncio.Queue(maxsize=100)
+    # Fetch latest message ID to determine channel range
+    try:
+        latest_history = await user_app_1.invoke(
+            raw.functions.messages.GetHistory(
+                peer=peer,
+                offset_id=0,
+                offset_date=0,
+                add_offset=0,
+                limit=1,
+                max_id=0,
+                min_id=0,
+                hash=0
+            )
+        )
+        latest_msgs = getattr(latest_history, "messages", [])
+        if not latest_msgs:
+            if status_message:
+                await status_message.edit_text("⚠️ Channel is empty!")
+            return 0
+        max_msg_id = latest_msgs[0].id
+    except Exception as e:
+        print(f"❌ Failed to fetch latest message ID: {e}", flush=True)
+        max_msg_id = 2000000  # Fallback assumption
 
-    # 4 Concurrent DB writers
-    NUM_WRITERS = 4
+    min_msg_id = 1
+    mid_msg_id = max_msg_id // 2
+
+    files_collection = db.get_collection("files")
+    queue = asyncio.Queue(maxsize=200)
+
+    # 6 Concurrent DB writers for blazing fast Mongo ingest
+    NUM_WRITERS = 6
     writer_tasks = [
         asyncio.create_task(db_writer_worker(queue, files_collection))
         for _ in range(NUM_WRITERS)
     ]
 
-    count = 0
-    skipped_duplicates = 0
-    batch_seen = set()
-    current_batch = []
-    BATCH_SIZE = 2000
+    stats = {
+        "count": 0,
+        "skipped_duplicates": 0,
+        "batch_seen": set()
+    }
+
     start_time = time.time()
     last_status_update = time.time()
 
-    offset_id = 0
-    LIMIT = 100
+    # Split work between user_app_1 and user_app_2
+    # Client 1 handles newer half (max_msg_id down to mid_msg_id)
+    # Client 2 handles older half (mid_msg_id - 1 down to min_msg_id)
+    worker_1 = asyncio.create_task(
+        fetch_range_worker(user_app_1, peer, mid_msg_id, max_msg_id, queue, stats)
+    )
+    worker_2 = asyncio.create_task(
+        fetch_range_worker(user_app_2, peer, min_msg_id, mid_msg_id - 1, queue, stats)
+    )
 
-    try:
-        while True:
-            try:
-                # Scans all channel messages sequentially (no files skipped)
-                history = await user_app.invoke(
-                    raw.functions.messages.GetHistory(
-                        peer=peer,
-                        offset_id=offset_id,
-                        offset_date=0,
-                        add_offset=0,
-                        limit=LIMIT,
-                        max_id=0,
-                        min_id=0,
-                        hash=0
-                    )
-                )
-            except FloodWait as fw:
-                print(f"⚠️ FloodWait: Sleeping {fw.value}s", flush=True)
-                await asyncio.sleep(fw.value + 1)
-                continue
-            except Exception as req_err:
-                print(f"⚠️ Network retry: {req_err}", flush=True)
-                await asyncio.sleep(1)
-                continue
-
-            raw_messages = getattr(history, "messages", [])
-            if not raw_messages:
-                break
-
-            offset_id = raw_messages[-1].id
-
-            for msg in raw_messages:
-                if not hasattr(msg, "media") or not msg.media:
-                    continue
-
-                media = msg.media
-                doc = getattr(media, "document", None)
-                is_video = False
-
-                # Handle native Telegram videos as well
-                if not doc and hasattr(media, "video"):
-                    doc = getattr(media, "video", None)
-                    is_video = True
-
-                if not doc:
-                    continue
-
-                sig = zlib.crc32(f"{doc.id}:{getattr(doc, 'size', 0)}".encode("utf-8"))
-                if sig in batch_seen:
-                    skipped_duplicates += 1
-                    continue
-                batch_seen.add(sig)
-
-                caption = getattr(msg, "message", "")
-                msg_date = getattr(msg, "date", None)
-
-                op = fast_parse_media(doc, is_video, caption, STORAGE_CHANNEL_ID, msg.id, msg_date)
-                if op:
-                    current_batch.append(op)
-                    count += 1
-
-                if len(current_batch) >= BATCH_SIZE:
-                    await queue.put(list(current_batch))
-                    current_batch.clear()
-
-            # Dynamic live progress edit every 10 seconds
-            if status_message and (time.time() - last_status_update > 10):
+    # Background task to live-update status message every 5 seconds
+    async def progress_updater():
+        nonlocal last_status_update
+        while not (worker_1.done() and worker_2.done()):
+            if status_message and (time.time() - last_status_update > 5):
                 elapsed = max(round(time.time() - start_time), 1)
-                rate = int(count / elapsed)
+                rate = int(stats["count"] / elapsed)
                 try:
                     await status_message.edit_text(
-                        f"⚡ <b>Full Reindexing in progress...</b>\n\n"
-                        f"📁 Total Indexed: <code>{count:,}</code>\n"
-                        f"⚠️ Duplicates: <code>{skipped_duplicates:,}</code>\n"
+                        f"⚡ <b>2-Session Parallel Reindex running...</b>\n\n"
+                        f"📁 Total Indexed: <code>{stats['count']:,}</code>\n"
+                        f"⚠️ Duplicates: <code>{stats['skipped_duplicates']:,}</code>\n"
                         f"⏱ Elapsed: <code>{elapsed}s</code>\n"
                         f"🚀 Speed: <code>~{rate:,} files/s</code>"
                     )
                     last_status_update = time.time()
                 except Exception:
                     pass
+            await asyncio.sleep(2)
 
-            await asyncio.sleep(0)
+    progress_task = asyncio.create_task(progress_updater())
 
-        if current_batch:
-            await queue.put(list(current_batch))
-            current_batch.clear()
+    # Wait for both workers to finish fetching
+    await asyncio.gather(worker_1, worker_2)
+    progress_task.cancel()
 
-    finally:
-        batch_seen.clear()
-        for _ in range(NUM_WRITERS):
-            await queue.put(None)
-        await queue.join()
-        await asyncio.gather(*writer_tasks)
+    # Signal database writers to finish remaining queue items
+    for _ in range(NUM_WRITERS):
+        await queue.put(None)
+    await queue.join()
+    await asyncio.gather(*writer_tasks)
 
     total_time = max(round(time.time() - start_time, 2), 0.1)
-    avg_speed = int(count / total_time)
+    avg_speed = int(stats["count"] / total_time)
 
     final_text = (
-        f"✅ <b>Full Complete Reindex Finished!</b> ⚡\n\n"
-        f"📁 <b>Total Indexed:</b> <code>{count:,}</code>\n"
-        f"⚠️ <b>Duplicates Filtered:</b> <code>{skipped_duplicates:,}</code>\n"
+        f"✅ <b>2-Session Parallel Reindex Finished!</b> ⚡\n\n"
+        f"📁 <b>Total Indexed:</b> <code>{stats['count']:,}</code>\n"
+        f"⚠️ <b>Duplicates Filtered:</b> <code>{stats['skipped_duplicates']:,}</code>\n"
         f"⏱ <b>Time Taken:</b> <code>{total_time}s</code>\n"
         f"🚀 <b>Throughput:</b> <code>~{avg_speed:,} files/sec</code>"
     )
@@ -261,4 +321,4 @@ async def reindex_channel(status_message=None):
             pass
 
     await send_log(final_text)
-    return count
+    return stats["count"]
