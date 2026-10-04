@@ -12,7 +12,7 @@ from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
 from utils.logger import send_log
 
-print("✅ reindex.py (2-User Sessions Parallel Fast Media Engine) imported", flush=True)
+print("✅ reindex.py (Ultra-Optimized 2-User Sessions Parallel Engine) imported", flush=True)
 
 
 # ============================================================
@@ -109,7 +109,7 @@ async def db_writer_worker(queue, files_collection):
 
 async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
     offset_id = end_id  # Start from newer message and go backwards towards start_id
-    LIMIT = 100
+    LIMIT = 500  # Increased limit for faster batch retrieval
 
     while offset_id >= start_id:
         try:
@@ -171,7 +171,7 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
                 current_batch.append(op)
                 stats["count"] += 1
 
-            if len(current_batch) >= 1500:
+            if len(current_batch) >= 3000:  # Increased batch threshold for blazing speed
                 await queue.put(list(current_batch))
                 current_batch.clear()
 
@@ -189,14 +189,14 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
 
 
 # ============================================================
-# COMPLETE 2-SESSION PARALLEL STREAM REINDEX RUNNER
+# COMPLETE ULTRA-FAST 2-SESSION PARALLEL STREAM REINDEX RUNNER
 # ============================================================
 
 async def reindex_channel(status_message=None):
     if not user_app_1 or not user_app_2:
         raise Exception("Both USER_SESSION_1 and USER_SESSION_2 are required for parallel reindexing.")
 
-    print("⚡ Starting Ultra-Fast 2-Session Parallel Reindex...", flush=True)
+    print("⚡ Starting Ultra-Optimized 2-Session Parallel Reindex...", flush=True)
 
     # Ensure both user session clients are started
     if not user_app_1.is_connected:
@@ -206,8 +206,8 @@ async def reindex_channel(status_message=None):
 
     await send_log(
         """
-⚡ <b>Ultra-Fast 2-Session Parallel Reindex Started</b>
-🚀 Scanning Channel using 2 User Accounts simultaneously...
+⚡ <b>Ultra-Optimized 2-Session Parallel Reindex Started</b>
+🚀 Scanning Channel using 2 User Accounts simultaneously at max speed...
 """
     )
 
@@ -249,10 +249,10 @@ async def reindex_channel(status_message=None):
     mid_msg_id = max_msg_id // 2
 
     files_collection = db.get_collection("files")
-    queue = asyncio.Queue(maxsize=200)
+    queue = asyncio.Queue(maxsize=300)
 
-    # 6 Concurrent DB writers for blazing fast Mongo ingest
-    NUM_WRITERS = 6
+    # 10 Concurrent DB writers for ultimate Mongo bulk ingest performance
+    NUM_WRITERS = 10
     writer_tasks = [
         asyncio.create_task(db_writer_worker(queue, files_collection))
         for _ in range(NUM_WRITERS)
@@ -284,7 +284,7 @@ async def reindex_channel(status_message=None):
                 rate = int(stats["count"] / elapsed) if elapsed > 0 else 0
                 try:
                     await status_message.edit_text(
-                        f"⚡ <b>2-Session Parallel Reindex running...</b>\n\n"
+                        f"⚡ <b>Ultra-Optimized 2-Session Reindex running...</b>\n\n"
                         f"📁 Total Indexed: <code>{stats['count']:,}</code>\n"
                         f"⚠️ Duplicates: <code>{stats['skipped_duplicates']:,}</code>\n"
                         f"⏱ Elapsed: <code>{elapsed}s</code>\n"
@@ -311,7 +311,7 @@ async def reindex_channel(status_message=None):
     avg_speed = int(stats["count"] / total_time)
 
     final_text = (
-        f"✅ <b>2-Session Parallel Reindex Finished!</b> ⚡\n\n"
+        f"✅ <b>Ultra-Optimized 2-Session Reindex Finished!</b> ⚡\n\n"
         f"📁 <b>Total Indexed:</b> <code>{stats['count']:,}</code>\n"
         f"⚠️ <b>Duplicates Filtered:</b> <code>{stats['skipped_duplicates']:,}</code>\n"
         f"⏱ <b>Time Taken:</b> <code>{total_time}s</code>\n"
