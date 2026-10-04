@@ -5,7 +5,7 @@ import aiohttp
 from bson import ObjectId
 
 from pyrogram import filters
-from pyrogram.types import Message, ChatMemberUpdated, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message
 
 from bot import app
 from config import START_IMAGES
@@ -35,39 +35,6 @@ HTTP_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 }
-
-
-def group_start_buttons(bot_username: str = None):
-    """
-    Group specific start keyboard layout:
-    Row 1: Add Me to Your Groups
-    Row 2: Updates | About
-    """
-    if bot_username:
-        add_group_url = f"https://t.me/{bot_username}?startgroup=true&admin=change_info+delete_messages+invite_users+pin_messages"
-    else:
-        add_group_url = "https://t.me/"
-
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "➕ Add Me to Your Groups",
-                    url=add_group_url
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "📢 Updates",
-                    url="https://t.me/mrDuDeHoLic"
-                ),
-                InlineKeyboardButton(
-                    "☺️ About",
-                    callback_data="home_about"
-                )
-            ]
-        ]
-    )
 
 
 async def download_image_stream(url: str) -> io.BytesIO | None:
@@ -114,100 +81,6 @@ async def process_user_db(user_id: int, username: str, chat_id: int, chat_type: 
 
 
 # ============================================================
-# BOT ADDED TO GROUP WATCHER (WELCOME & ADMIN CHECK)
-# ============================================================
-
-@app.on_chat_member_updated()
-async def bot_added_to_group(client, chat_member_updated: ChatMemberUpdated):
-    """Handles when the bot is added to a group via the Add to Group button."""
-    try:
-        new_member = chat_member_updated.new_chat_member
-        if new_member and new_member.user.id == (await client.get_me()).id:
-            chat = chat_member_updated.chat
-            
-            # Check if bot has admin rights or standard member status
-            if new_member.status in ["administrator", "creator"]:
-                text = (
-                    f"🎉 Thank you for adding me to **{chat.title}**!\n\n"
-                    "I am successfully configured as an **Administrator**. "
-                    "You can now search for movies here using inline mode!"
-                )
-            else:
-                text = (
-                    f"👋 Hello everyone in **{chat.title}**!\n\n"
-                    "Thank you for adding me. Please promote me as an **Administrator** "
-                    "so I can function properly and help you search movies efficiently."
-                )
-            
-            await client.send_message(chat.id, text)
-    except Exception as e:
-        print(f"[group watcher error] {e}", flush=True)
-
-
-# ============================================================
-# GROUP /START COMMAND HANDLER
-# ============================================================
-
-@app.on_message(
-    filters.group & filters.command("start")
-)
-async def group_start_command(client, message: Message):
-    print("GROUP START HANDLER CALLED", flush=True)
-
-    bot_info = await client.get_me()
-    bot_username = bot_info.username if bot_info else None
-
-    caption = (
-        f"**🤖 Hello everyone in {message.chat.title}! 👋\n\n"
-        "✨ Welcome to CinemaVeta 🍿🔥\n\n"
-        "🔍 Search your favorite Movies & Series directly in this group using inline mode\n\n"
-        "💭 Just type the movie name or add me to more groups below!** 🚀"
-    )
-
-    markup = group_start_buttons(bot_username)
-
-    if not START_IMAGES:
-        return await message.reply_text(
-            text=caption,
-            reply_markup=markup,
-            quote=True
-        )
-
-    selected_url = random.choice(START_IMAGES)
-
-    try:
-        await message.reply_photo(
-            photo=selected_url,
-            caption=caption,
-            reply_markup=markup,
-            quote=True
-        )
-        return
-    except Exception:
-        pass
-
-    bio = await download_image_stream(selected_url)
-    if bio:
-        bio.seek(0)
-        try:
-            await message.reply_photo(
-                photo=bio,
-                caption=caption,
-                reply_markup=markup,
-                quote=True
-            )
-            return
-        except Exception:
-            pass
-
-    await message.reply_text(
-        text=caption,
-        reply_markup=markup,
-        quote=True
-    )
-
-
-# ============================================================
 # /START HANDLER (PRIVATE ONLY - INSTANT SPEED)
 # ============================================================
 
@@ -223,10 +96,6 @@ async def start_command(
     user = message.from_user
     if not user:
         return
-
-    # Fetch bot username for group deep-linking buttons
-    bot_info = await client.get_me()
-    bot_username = bot_info.username if bot_info else None
 
     # 1. SEND LOADING STICKER IMMEDIATELY
     loading_msg = None
@@ -261,7 +130,7 @@ async def start_command(
                 return await message.reply_text(
                     "✅ <b>You have joined all required channels!</b>\n\n"
                     "You can now use Inline search freely.",
-                    reply_markup=start_buttons(bot_username),
+                    reply_markup=start_buttons(),
                     quote=True
                 )
 
@@ -367,7 +236,7 @@ async def start_command(
         if not START_IMAGES:
             return await message.reply_text(
                 text=caption,
-                reply_markup=start_buttons(bot_username),
+                reply_markup=start_buttons(),
                 quote=True
             )
 
@@ -378,7 +247,7 @@ async def start_command(
             await message.reply_photo(
                 photo=selected_url,
                 caption=caption,
-                reply_markup=start_buttons(bot_username),
+                reply_markup=start_buttons(),
                 quote=True
             )
             print("⚡ INSTANT CONFIG PHOTO SENT", flush=True)
@@ -394,7 +263,7 @@ async def start_command(
                 await message.reply_photo(
                     photo=bio,
                     caption=caption,
-                    reply_markup=start_buttons(bot_username),
+                    reply_markup=start_buttons(),
                     quote=True
                 )
                 print("⚡ BUFFER STREAM PHOTO SENT", flush=True)
@@ -405,7 +274,7 @@ async def start_command(
         # 3. Text fallback if image loading fails completely
         await message.reply_text(
             text=caption,
-            reply_markup=start_buttons(bot_username),
+            reply_markup=start_buttons(),
             quote=True
         )
 
