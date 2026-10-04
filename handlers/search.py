@@ -623,11 +623,7 @@ async def execute_search(
         # ====================================================
 
         imdb_suggestions = []
-
-        if (
-            allow_spelling_suggestions
-            and not has_explicit_year
-        ):
+        if allow_spelling_suggestions:
             try:
                 imdb_suggestions = (
                     await get_imdb_suggestions(
@@ -674,12 +670,8 @@ async def execute_search(
         # ====================================================
         # 4. SHOW IMDb VARIANTS
         # ====================================================
-
-        if (
-            imdb_suggestions
-            and len(imdb_suggestions) > 1
-            and not has_explicit_year
-        ):
+      
+        if imdb_suggestions:
 
             normalized_query = re.sub(
                 r"[^a-z0-9 ]",
