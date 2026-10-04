@@ -5,7 +5,7 @@ from pyrogram.types import Message
 
 from bot import app, user_app_1
 from config import STORAGE_CHANNEL_ID, OWNER_ID
-from database.models import save_file
+from database.models import save_file, files
 from utils.rename import (
     clean_name,
     clean_movie_name,
@@ -184,6 +184,19 @@ async def auto_index(
         file_size = getattr(media, "file_size", 0) or 0
         msg_date = getattr(message, "date", None)
         timestamp = int(msg_date.timestamp()) if msg_date else int(time.time())
+
+        # ====================================================
+        # DUPLICATE CHECK (Exact Name + Exact Size)
+        # ====================================================
+
+        existing_file = await files().find_one({
+            "file_name": renamed_file,
+            "file_size_bytes": file_size
+        })
+
+        if existing_file:
+            # Duplicate file detected, skip saving to DB
+            return
 
         # ====================================================
         # FILE DATA
