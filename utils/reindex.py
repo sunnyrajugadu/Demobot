@@ -79,7 +79,8 @@ def fast_parse_media(doc, is_video, caption, chat_id, msg_id, msg_date):
 
     # ============================================================
     # 🔴 DB DUPLICATE CHECK FIX (Name + Size Exact Match)
-    # Changed from upserting by file_unique_id to name+size combination
+    # Using MongoDB's blazingly fast atomic upsert with the compound index.
+    # It will only insert if BOTH file_name and file_size_bytes don't exist together.
     # ============================================================
     return UpdateOne(
         {
@@ -102,8 +103,11 @@ async def db_writer_worker(queue, files_collection):
             queue.task_done()
             break
         try:
+            # unordered=False allows MongoDB to process the batch concurrently.
             await files_collection.bulk_write(batch, ordered=False)
         except BulkWriteError:
+            # BulkWriteError will catch duplicate key errors if any slip through,
+            # ignoring them and letting valid ones pass.
             pass
         except Exception:
             pass
@@ -115,9 +119,9 @@ async def db_writer_worker(queue, files_collection):
 # WORKER FOR FETCHING A SPECIFIC MESSAGE ID RANGE (PER CLIENT)
 # ============================================================
 
-async def fetch_range_worker(client, peer, start_id, end_id, queue, stats, files_collection):
+async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
     offset_id = end_id  # Start from newer message and go backwards towards start_id
-    LIMIT = 500  # Increased limit for faster batch retrieval
+    LIMIT = 500  # Batch retrieval limit
 
     while offset_id >= start_id:
         try:
@@ -166,7 +170,8 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats, files
                 continue
 
             # ============================================================
-            # 🔴 STRICT EXACT DUPLICATE CHECK (Name + Size)
+            # 🔴 IN-MEMORY DUPLICATE CHECK (Name + Size Exact Match)
+            # Extremely fast RAM check. Removes the slow DB find_one bottleneck.
             # ============================================================
             temp_file_name = ""
             for attr in getattr(doc, "attributes", []):
@@ -175,24 +180,12 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats, files
             
             temp_file_size = getattr(doc, 'size', 0) or 0
             
-            # Using exact string match instead of crc32 hash to prevent collisions
             exact_match_key = f"{temp_file_name}::{temp_file_size}"
             
             if exact_match_key in stats["batch_seen"]:
                 stats["skipped_duplicates"] += 1
                 continue
             
-            # Check DB directly for extra safety before adding to queue
-            db_exists = await files_collection.find_one({
-                "file_name": temp_file_name,
-                "file_size_bytes": temp_file_size
-            }, {"_id": 1})
-            
-            if db_exists:
-                stats["batch_seen"].add(exact_match_key)
-                stats["skipped_duplicates"] += 1
-                continue
-
             stats["batch_seen"].add(exact_match_key)
 
             caption = getattr(msg, "message", "")
@@ -203,7 +196,7 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats, files
                 current_batch.append(op)
                 stats["count"] += 1
 
-            if len(current_batch) >= 3000:  # Slightly reduced batch threshold for stability
+            if len(current_batch) >= 3000:  # Kept at 3000 for maximum throughput speed
                 await queue.put(list(current_batch))
                 current_batch.clear()
 
@@ -301,10 +294,10 @@ async def reindex_channel(status_message=None):
 
     # Split work between user_app_1 and user_app_2 using their respective resolved peers
     worker_1 = asyncio.create_task(
-        fetch_range_worker(user_app_1, peer_1, mid_msg_id, max_msg_id, queue, stats, files_collection)
+        fetch_range_worker(user_app_1, peer_1, mid_msg_id, max_msg_id, queue, stats)
     )
     worker_2 = asyncio.create_task(
-        fetch_range_worker(user_app_2, peer_2, min_msg_id, mid_msg_id - 1, queue, stats, files_collection)
+        fetch_range_worker(user_app_2, peer_2, min_msg_id, mid_msg_id - 1, queue, stats)
     )
 
     # Background task to live-update status message every 5 seconds
@@ -318,7 +311,7 @@ async def reindex_channel(status_message=None):
                     await status_message.edit_text(
                         f"⚡ <b>Ultra-Optimized 2-Session Reindex running...</b>\n\n"
                         f"📁 Total Indexed: <code>{stats['count']:,}</code>\n"
-                        f"⚠️ Duplicates: <code>{stats['skipped_duplicates']:,}</code>\n"
+                        f"⚠️ RAM Duplicates Skipped: <code>{stats['skipped_duplicates']:,}</code>\n"
                         f"⏱ Elapsed: <code>{elapsed}s</code>\n"
                         f"🚀 Speed: <code>~{rate:,} files/s</code>"
                     )
@@ -345,7 +338,7 @@ async def reindex_channel(status_message=None):
     final_text = (
         f"✅ <b>Ultra-Optimized 2-Session Reindex Finished!</b> ⚡\n\n"
         f"📁 <b>Total Indexed:</b> <code>{stats['count']:,}</code>\n"
-        f"⚠️ <b>Duplicates Filtered:</b> <code>{stats['skipped_duplicates']:,}</code>\n"
+        f"⚠️ <b>RAM Duplicates Filtered:</b> <code>{stats['skipped_duplicates']:,}</code>\n"
         f"⏱ <b>Time Taken:</b> <code>{total_time}s</code>\n"
         f"🚀 <b>Throughput:</b> <code>~{avg_speed:,} files/sec</code>"
     )
