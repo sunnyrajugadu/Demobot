@@ -11,16 +11,19 @@ def start_buttons(bot_username: str = None):
     Main /start and Home keyboard.
 
     Row 1:
-        ➕ Add Me to Your Groups | 🔍 Search Movies
+        ➕ Add Me to Your Groups
 
     Row 2:
-        📢 Updates
+        🔍 Search Movies | 📢 Updates
 
     Row 3:
         ☺️ About
     """
-    # Create the deep-link URL for adding the bot to a group
-    add_group_url = f"https://t.me/{bot_username}?startgroup=true" if bot_username else "https://t.me/"
+    # Create the deep-link URL for adding the bot to a group with automatic admin permissions pre-selected
+    if bot_username:
+        add_group_url = f"https://t.me/{bot_username}?startgroup=true&admin=change_info+delete_messages+invite_users+pin_messages"
+    else:
+        add_group_url = "https://t.me/"
 
     return InlineKeyboardMarkup(
         [
@@ -28,13 +31,13 @@ def start_buttons(bot_username: str = None):
                 InlineKeyboardButton(
                     "➕ Add Me to Your Groups",
                     url=add_group_url
-                ),
-                InlineKeyboardButton(
-                    "🔍 Search Movies",
-                    switch_inline_query_current_chat=""
                 )
             ],
             [
+                InlineKeyboardButton(
+                    "🔍 Search Movies",
+                    switch_inline_query_current_chat=""
+                ),
                 InlineKeyboardButton(
                     "📢 Updates",
                     url="https://t.me/mrDuDeHoLic"
