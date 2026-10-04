@@ -19,7 +19,7 @@ def start_buttons(bot_username: str = None):
     Row 3:
         ☺️ About
     """
-    # Group ki add chese URL ni create chestunnamu
+    # Create the deep-link URL for adding the bot to a group
     add_group_url = f"https://t.me/{bot_username}?startgroup=true" if bot_username else "https://t.me/"
 
     return InlineKeyboardMarkup(
