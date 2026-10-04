@@ -540,7 +540,7 @@ async def execute_search(
                     InlineKeyboardButton("‼️ INSTRUCTIONS ‼️", callback_data="search_instructions")
                 ],
                 [
-                    InlineKeyboardButton("♻ GOOGLE SEARCH ♻️", url=google_search_url)
+                    InlineKeyboardButton("♻️ GOOGLE SEARCH ♻️", url=google_search_url)
                 ]
             ]
 
