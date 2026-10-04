@@ -31,7 +31,7 @@ print("✅ search.py imported", flush=True)
 
 # ================= SETTINGS ================= #
 
-MENU_EXPIRE_SECONDS = 10
+MENU_EXPIRE_SECONDS = 300
 
 PAGE_LIMIT = 7
 
