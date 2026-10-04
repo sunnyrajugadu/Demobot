@@ -108,10 +108,10 @@ async def db_writer_worker(queue, files_collection):
 # ============================================================
 
 async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
-    offset_id = start_id
+    offset_id = end_id  # Start from newer message and go backwards towards start_id
     LIMIT = 100
 
-    while offset_id <= end_id:
+    while offset_id >= start_id:
         try:
             history = await client.invoke(
                 raw.functions.messages.GetHistory(
@@ -138,13 +138,9 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
         if not raw_messages:
             break
 
-        # Move offset forward to older messages
-        offset_id = raw_messages[-1].id
-
         current_batch = []
         for msg in raw_messages:
-            # Stop if we cross the partition end boundary
-            if msg.id > end_id:
+            if msg.id < start_id:
                 continue
 
             if not hasattr(msg, "media") or not msg.media:
@@ -183,9 +179,11 @@ async def fetch_range_worker(client, peer, start_id, end_id, queue, stats):
             await queue.put(list(current_batch))
             current_batch.clear()
 
-        # Break if we reached or passed the start_id boundary towards older IDs
-        if raw_messages[-1].id <= start_id:
+        # Update offset to the oldest message received in this batch
+        oldest_msg_id = raw_messages[-1].id
+        if oldest_msg_id <= start_id:
             break
+        offset_id = oldest_msg_id
 
         await asyncio.sleep(0)
 
@@ -199,6 +197,12 @@ async def reindex_channel(status_message=None):
         raise Exception("Both USER_SESSION_1 and USER_SESSION_2 are required for parallel reindexing.")
 
     print("⚡ Starting Ultra-Fast 2-Session Parallel Reindex...", flush=True)
+
+    # Ensure both user session clients are started
+    if not user_app_1.is_connected:
+        await user_app_1.start()
+    if not user_app_2.is_connected:
+        await user_app_2.start()
 
     await send_log(
         """
@@ -277,7 +281,7 @@ async def reindex_channel(status_message=None):
         while not (worker_1.done() and worker_2.done()):
             if status_message and (time.time() - last_status_update > 5):
                 elapsed = max(round(time.time() - start_time), 1)
-                rate = int(stats["count"] / elapsed)
+                rate = int(stats["count"] / elapsed) if elapsed > 0 else 0
                 try:
                     await status_message.edit_text(
                         f"⚡ <b>2-Session Parallel Reindex running...</b>\n\n"
