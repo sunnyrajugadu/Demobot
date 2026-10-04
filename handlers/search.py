@@ -420,7 +420,7 @@ async def execute_search(
             reaction_payload = {
                 "chat_id": chat_id,
                 "message_id": reply_to_message_id,
-                "reaction": [{"type": "emoji", "emoji": "⚡"}],
+                "reaction": [{"type": "emoji", "emoji": "🤝"}],
                 "is_big": True
             }
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2.0)) as session:
@@ -431,8 +431,8 @@ async def execute_search(
         try:
             loading_msg = await client.send_message(
                 chat_id=chat_id,
-                text=f"**🔎 S E A R C H I N G** `{movie_name}` **. . .**",
-                reply_to_message_id=reply_to_message_id
+                text=f"**🔎 Searching** `{movie_name}` **. . .**",
+                reply_to_message_id=reply ni_to_message_id
             )
         except Exception:
             pass
