@@ -31,6 +31,9 @@ print("✅ search.py imported", flush=True)
 
 # ================= SETTINGS ================= #
 
+
+MENU_EXPIRE_SECONDS = 10 
+
 PAGE_LIMIT = 7
 
 FIXED_LANGUAGES = [
@@ -258,6 +261,19 @@ async def auto_delete_message(message, delay_seconds: int = 40):
     try:
         await asyncio.sleep(delay_seconds)
         await message.delete()
+    except Exception:
+        pass
+
+
+# ================= AUTO DELETE MENU AFTER EXPIRY ================= #
+
+async def auto_delete_menu(client, chat_id, message_id):
+    try:
+        await asyncio.sleep(MENU_EXPIRE_SECONDS)
+        await client.delete_messages(
+            chat_id=chat_id,
+            message_ids=message_id
+        )
     except Exception:
         pass
 
@@ -617,11 +633,13 @@ async def execute_search(
 
         reply_markup = InlineKeyboardMarkup(buttons)
 
-        # ================= DISPATCH PHOTO BANNER ================= #
+                # ================= DISPATCH PHOTO BANNER ================= #
         sent_success = False
+        sent_message = None
+        
         if landscape_banner_url:
             try:
-                await client.send_photo(
+                sent_message = await client.send_photo(
                     chat_id=chat_id,
                     photo=landscape_banner_url,
                     caption=final_caption,
@@ -630,13 +648,13 @@ async def execute_search(
                 )
                 sent_success = True
             except Exception as pe:
-                print(f"⚠️ Landscape direct URL failed ({pe}), attempting stream...", flush=True)
+                print(f"⚠️️ Landscape direct URL failed ({pe}), attempting stream...", flush=True)
                 try:
                     async with aiohttp.ClientSession() as session:
                         async with session.get(landscape_banner_url, timeout=aiohttp.ClientTimeout(total=4)) as img_resp:
                             if img_resp.status == 200:
                                 img_bytes = await img_resp.read()
-                                await client.send_photo(
+                                sent_message = await client.send_photo(
                                     chat_id=chat_id,
                                     photo=img_bytes,
                                     caption=final_caption,
@@ -648,21 +666,26 @@ async def execute_search(
                     print(f"⚠️ Stream fallback error: {b_err}", flush=True)
 
         if not sent_success:
-            await client.send_message(
+            sent_message = await client.send_message(
                 chat_id=chat_id,
                 text=final_caption,
                 reply_markup=reply_markup,
                 reply_to_message_id=reply_to_message_id
             )
 
-        print("✅ SEARCH RESULT SENT SUCCESSFULLY", flush=True)
+        # ====================================================
+        # AUTO DELETE SEARCH MENU TASK
+        # ====================================================
+        if sent_message:
+            asyncio.create_task(
+                auto_delete_menu(
+                    client=client,
+                    chat_id=chat_id,
+                    message_id=sent_message.id
+                )
+            )
 
-    except Exception as e:
-        print(f"❌ SEARCH ERROR : {e}", flush=True)
-        try:
-            await client.send_message(chat_id, "⚠️ Something went wrong.", reply_to_message_id=reply_to_message_id)
-        except Exception:
-            pass
+        print("✅ SEARCH RESULT SENT SUCCESSFULLY", flush=True)
 
 
 # ================= PRIVATE TEXT & SEARCH HANDLER ================= #
