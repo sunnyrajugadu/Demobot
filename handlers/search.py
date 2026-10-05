@@ -355,11 +355,16 @@ def release_variant_score(file, canonical_title, target_year=None):
         score += 1000
 
     if target_year:
-        if target_year in movie_years(file):
+        file_years = movie_years(file)
+
+        # IMDb year is only a preference, NEVER a hard requirement.
+        # TV/series releases frequently omit the original year, and episode
+        # filenames may contain other years (air dates, metadata, etc.).
+        # Therefore a title match must survive regardless of filename year.
+        if target_year in file_years:
             score += 5000
         else:
-            # If IMDb selected a year, do not mix another movie/year into it.
-            return 0
+            score += 1500
 
     return score
 
