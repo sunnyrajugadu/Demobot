@@ -822,16 +822,21 @@ async def create_imdb_banner(info):
         width=7,
     )
 
+
     # --------------------------------------------------------
-    # Export High Quality PNG
+    # Export 100% Quality JPEG
     # --------------------------------------------------------
 
     output = io.BytesIO()
-    canvas.save(
+    canvas.convert("RGB").save(
         output,
-        format="PNG"
+        format="JPEG",
+        quality=100,          # 95 nundi 100 ki pencham
+        subsampling=0,        # Color blur avvakunda aputhundi
+        optimize=True,
     )
     output.seek(0)
-    output.name = "imdb_banner.png"
+    output.name = "imdb_banner.jpg"
 
     return output
+
