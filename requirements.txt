@@ -10,3 +10,4 @@ requests
 psutil
 thefuzz
 python-Levenshtein
+Pillow
