@@ -191,8 +191,14 @@ def get_file_display_name(file):
 # ============================================================
 
 SEARCH_STOP_WORDS = {
+    # Generic title words that are frequently omitted/reordered in stored
+    # release filenames and therefore should not be mandatory for matching.
     "the", "a", "an", "of", "and", "or", "to", "in", "on",
-    "for", "from", "with", "at", "by"
+    "for", "from", "with", "at", "by",
+    # IMDb may call a sequel "Part 2", while release filenames commonly
+    # use only the numeric form: "Movie 2". Treat "Part" as release/title
+    # metadata, not as a required identity token.
+    "part", "chapter", "episode",
 }
 
 
