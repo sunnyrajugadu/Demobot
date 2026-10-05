@@ -13,6 +13,7 @@ TMDB_API_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/"
 
 TMDB_KEY = "7f43669a428c09611a0518fa9c0bbddb"
+TOMATO_ICON_URL = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f345.png"
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(
     total=15,
@@ -231,12 +232,13 @@ def _draw_pill(
     xy,
     text,
     font,
-    fill=(255, 255, 255, 42),
-    outline=(255, 255, 255, 105),
+    fill=(35, 35, 35, 180),
+    outline=(255, 255, 255, 90),
     text_fill=(255, 255, 255, 255),
     padding_x=18,
     padding_y=9,
     radius=22,
+    icon=None
 ):
     draw = ImageDraw.Draw(base, "RGBA")
     x, y = xy
@@ -246,10 +248,23 @@ def _draw_pill(
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
 
+    icon_w, icon_h = 0, 0
+    icon_padding = 0
+    
+    if icon:
+        target_h = int(th * 1.1)
+        ratio = target_h / icon.height
+        target_w = int(icon.width * ratio)
+        icon = icon.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        icon_w, icon_h = icon.size
+        icon_padding = 8
+
+    total_w = tw + icon_w + icon_padding
+
     rect = (
         x,
         y,
-        x + tw + padding_x * 2,
+        x + total_w + padding_x * 2,
         y + th + padding_y * 2,
     )
 
@@ -261,11 +276,14 @@ def _draw_pill(
         width=1,
     )
 
+    text_x = x + padding_x
+    if icon:
+        icon_y = y + padding_y + (th - icon_h) // 2
+        base.alpha_composite(icon, (int(text_x), int(icon_y)))
+        text_x += icon_w + icon_padding
+
     draw.text(
-        (
-            x + padding_x,
-            y + padding_y - bbox[1],
-        ),
+        (text_x, y + padding_y - bbox[1]),
         text,
         font=font,
         fill=text_fill,
@@ -371,14 +389,15 @@ async def fetch_tmdb_backdrop_and_poster(
             backdrop_path = selected.get("backdrop_path")
             poster_path = selected.get("poster_path")
 
+            # Updated to fetch 'original' high quality images
             backdrop_url = (
-                f"{TMDB_IMAGE_BASE}w1280{backdrop_path}"
+                f"{TMDB_IMAGE_BASE}original{backdrop_path}"
                 if backdrop_path
                 else None
             )
 
             poster_url = (
-                f"{TMDB_IMAGE_BASE}w780{poster_path}"
+                f"{TMDB_IMAGE_BASE}original{poster_path}"
                 if poster_path
                 else None
             )
@@ -398,7 +417,7 @@ async def fetch_tmdb_backdrop_and_poster(
 # Download remote image
 # ============================================================
 
-async def _download_image(url):
+async def _download_image(url, keep_alpha=False):
     if not url:
         return None
 
@@ -415,12 +434,17 @@ async def _download_image(url):
                     return None
                 raw = await response.read()
 
-        image = Image.open(io.BytesIO(raw)).convert("RGB")
-        return image
+        img = Image.open(io.BytesIO(raw))
+        
+        # Support transparent PNGs if keep_alpha is True
+        if keep_alpha and img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+            return img.convert("RGBA")
+            
+        return img.convert("RGB")
 
     except Exception as exc:
         print(
-            f"IMDb Banner Image Download Error: {exc}",
+            f"IMDb Image Download Error: {exc}",
             flush=True,
         )
         return None
@@ -475,7 +499,7 @@ async def create_imdb_banner(info):
         (BANNER_WIDTH, BANNER_HEIGHT),
     )
 
-    background = background.filter(ImageFilter.GaussianBlur(radius=1.8))
+    background = background.filter(ImageFilter.GaussianBlur(radius=1.5))
     canvas = background.convert("RGBA")
 
     # --------------------------------------------------------
@@ -485,17 +509,18 @@ async def create_imdb_banner(info):
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay, "RGBA")
 
+    # Adjusted for lighter backdrop opacity matching 2nd image
     for x in range(BANNER_WIDTH):
         ratio = x / max(BANNER_WIDTH - 1, 1)
-        alpha = int(185 - (ratio * 82))
+        alpha = int(140 - (ratio * 110))
         od.line(
             (x, 0, x, BANNER_HEIGHT),
-            fill=(0, 0, 0, max(80, alpha)),
+            fill=(0, 0, 0, max(30, alpha)),
         )
 
     od.rectangle(
         (0, 0, BANNER_WIDTH, BANNER_HEIGHT),
-        fill=(0, 0, 0, 35),
+        fill=(0, 0, 0, 15),
     )
 
     canvas = Image.alpha_composite(canvas, overlay)
@@ -572,6 +597,7 @@ async def create_imdb_banner(info):
         fill=(255, 255, 255, 255),
     )
 
+    # IMDb Badge (Black bg, Yellow text)
     imdb_box_x = rating_x + 105
 
     draw.rounded_rectangle(
@@ -582,14 +608,16 @@ async def create_imdb_banner(info):
             title_y + 52,
         ),
         radius=10,
-        fill=(245, 190, 35, 235),
+        fill=(0, 0, 0, 255),
+        outline=(245, 190, 35, 255),
+        width=1
     )
 
     draw.text(
-        (imdb_box_x + 11, title_y + 18),
+        (imdb_box_x + 13, title_y + 18),
         "IMDb",
         font=small_font,
-        fill=(0, 0, 0, 255),
+        fill=(245, 190, 35, 255),
     )
 
     # --------------------------------------------------------
@@ -600,12 +628,12 @@ async def create_imdb_banner(info):
     draw.rounded_rectangle(
         (
             left_x,
-            title_bbox[3] + 6,
+            title_y + 78,
             left_x + underline_w,
-            title_bbox[3] + 11,
+            title_y + 83,
         ),
         radius=3,
-        fill=(205, 147, 82, 255),
+        fill=(245, 190, 35, 255),
     )
 
     # --------------------------------------------------------
@@ -633,20 +661,20 @@ async def create_imdb_banner(info):
         )
 
     # --------------------------------------------------------
-    # Information pills (FIXED for white filled design)
+    # Information pills (Dark theme matching 2nd image)
     # --------------------------------------------------------
 
     pill_y = 510
     pill_x = left_x
 
-    # Certificate UI (U/A 16+) - 1st image format
+    # Certificate UI
     rect = _draw_pill(
         canvas,
         (pill_x, pill_y),
         certificate,
         pill_font,
-        fill=(35, 35, 35, 175),
-        outline=(255, 255, 255, 100),
+        fill=(35, 35, 35, 180),
+        outline=(255, 255, 255, 90),
         text_fill=(255, 255, 255, 255),
         padding_x=18,
         padding_y=8,
@@ -655,24 +683,26 @@ async def create_imdb_banner(info):
 
     pill_x = rect[2] + 12
 
-    # Tomato-style popularity indicator
-    rating_value = (
-        f"🍅 {rating}"
-        if rating != "N/A"
-        else "🍅 N/A"
-    )
+    # Tomato-style rating with real transparent PNG
+    tomato_icon = await _download_image(TOMATO_ICON_URL, keep_alpha=True)
+    rating_value = f"{rating}" if rating != "N/A" else "N/A"
+    
+    # Fallback to emoji text only if PNG fails to load
+    if not tomato_icon:
+        rating_value = f"🍅 {rating_value}"
 
     rect = _draw_pill(
         canvas,
         (pill_x, pill_y),
         rating_value,
         pill_font,
-        fill=(255, 255, 255, 235),
-        outline=(255, 255, 255, 235),
-        text_fill=(25, 25, 25, 255),
+        fill=(35, 35, 35, 180),
+        outline=(255, 255, 255, 90),
+        text_fill=(255, 255, 255, 255),
         padding_x=17,
         padding_y=8,
         radius=20,
+        icon=tomato_icon
     )
 
     pill_x = rect[2] + 12
@@ -683,9 +713,9 @@ async def create_imdb_banner(info):
         (pill_x, pill_y),
         runtime,
         pill_font,
-        fill=(255, 255, 255, 235),
-        outline=(255, 255, 255, 235),
-        text_fill=(25, 25, 25, 255),
+        fill=(35, 35, 35, 180),
+        outline=(255, 255, 255, 90),
+        text_fill=(255, 255, 255, 255),
         padding_x=18,
         padding_y=8,
         radius=20,
@@ -711,14 +741,21 @@ async def create_imdb_banner(info):
         if pill_x + pill_width > pills_right:
             break
 
+        is_year = (item_index == len(pill_items) - 1)
+        
+        # Highlight logic for the Year pill
+        pill_fill = (245, 190, 35, 235) if is_year else (35, 35, 35, 180)
+        pill_text_color = (0, 0, 0, 255) if is_year else (255, 255, 255, 255)
+        pill_outline = (245, 190, 35, 255) if is_year else (255, 255, 255, 90)
+
         rect = _draw_pill(
             canvas,
             (pill_x, pill_y),
             item_text,
             pill_font,
-            fill=(255, 255, 255, 235),
-            outline=(255, 255, 255, 235),
-            text_fill=(25, 25, 25, 255),
+            fill=pill_fill,
+            outline=pill_outline,
+            text_fill=pill_text_color,
             padding_x=padding_x,
             padding_y=8,
             radius=20,
@@ -793,7 +830,7 @@ async def create_imdb_banner(info):
     canvas.convert("RGB").save(
         output,
         format="JPEG",
-        quality=94,
+        quality=95,
         optimize=True,
     )
     output.seek(0)
