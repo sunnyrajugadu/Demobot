@@ -1,6 +1,9 @@
 import html
+import io
 import json
 import re
+
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
 from urllib.parse import quote_plus
 
 import aiohttp
@@ -1320,6 +1323,436 @@ async def fetch_full_movie_details(
 
 
 # ============================================================
+# CUSTOM IMDb BANNER
+# ============================================================
+
+BANNER_WIDTH = 1536
+BANNER_HEIGHT = 864
+BANNER_CHANNEL = "@NXT_HUB"
+
+
+def _font(size, bold=False):
+    """Load a reliable Unicode font available on Render/Linux."""
+    candidates = (
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+        if bold
+        else [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+    )
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+def _fit_text(draw, text, font, max_width):
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+        return text
+    suffix = "..."
+    while text and draw.textbbox((0, 0), text + suffix, font=font)[2] > max_width:
+        text = text[:-1]
+    return (text.rstrip() + suffix) if text else suffix
+
+
+def _wrap_text(draw, text, font, max_width, max_lines=4):
+    text = re.sub(r"\s+", " ", str(text or "").strip())
+    if not text:
+        return []
+    words = text.split(" ")
+    lines = []
+    current = ""
+    for word in words:
+        candidate = word if not current else current + " " + word
+        if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = word
+            if len(lines) >= max_lines:
+                break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if len(lines) == max_lines and len(words) > 0:
+        # Make the last line visually complete with an ellipsis when needed.
+        joined_words = " ".join(words)
+        if " ".join(lines) != joined_words:
+            lines[-1] = _fit_text(draw, lines[-1], font, max_width - 24) + "..."
+    return lines
+
+
+def _rounded_mask(size, radius):
+    mask = Image.new("L", size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, size[0] - 1, size[1] - 1),
+        radius=radius,
+        fill=255,
+    )
+    return mask
+
+
+def _cover_image(image, size):
+    """Resize/crop image to fill size without distortion."""
+    image = image.convert("RGB")
+    src_w, src_h = image.size
+    dst_w, dst_h = size
+    src_ratio = src_w / max(src_h, 1)
+    dst_ratio = dst_w / max(dst_h, 1)
+
+    if src_ratio > dst_ratio:
+        new_h = dst_h
+        new_w = max(1, int(new_h * src_ratio))
+    else:
+        new_w = dst_w
+        new_h = max(1, int(new_w / src_ratio))
+
+    image = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    left = max(0, (new_w - dst_w) // 2)
+    top = max(0, (new_h - dst_h) // 2)
+    return image.crop((left, top, left + dst_w, top + dst_h))
+
+
+def _fit_poster(image, max_size):
+    image = image.convert("RGB")
+    image.thumbnail(max_size, Image.Resampling.LANCZOS)
+    return image
+
+
+def _draw_pill(base, xy, text, font, fill=(255, 255, 255, 42),
+               outline=(255, 255, 255, 105), text_fill=(255, 255, 255, 255),
+               padding_x=18, padding_y=9, radius=22):
+    draw = ImageDraw.Draw(base, "RGBA")
+    x, y = xy
+    box = draw.textbbox((0, 0), text, font=font)
+    tw = box[2] - box[0]
+    th = box[3] - box[1]
+    rect = (x, y, x + tw + padding_x * 2, y + th + padding_y * 2)
+    draw.rounded_rectangle(rect, radius=radius, fill=fill, outline=outline, width=1)
+    draw.text(
+        (x + padding_x, y + padding_y - box[1]),
+        text,
+        font=font,
+        fill=text_fill,
+    )
+    return rect
+
+
+async def fetch_tmdb_backdrop_and_poster(imdb_id, title=None, year=None):
+    """Resolve IMDb ID through TMDB and return a landscape backdrop URL."""
+    if not imdb_id:
+        return None, None
+
+    headers = {
+        "User-Agent": IMDB_HEADERS["User-Agent"],
+        "Accept": "application/json",
+    }
+    try:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=headers) as session:
+            find_url = f"{TMDB_API_URL}/find/{imdb_id}"
+            async with session.get(
+                find_url,
+                params={"api_key": TMDB_KEY, "external_source": "imdb_id"},
+            ) as response:
+                if response.status != 200:
+                    return None, None
+                found = await response.json(content_type=None)
+
+            results = found.get("movie_results") or found.get("tv_results") or []
+            if not results:
+                return None, None
+
+            target_title = str(title or "").strip().casefold()
+            target_year = str(year or "").strip()
+            selected = None
+            for item in results:
+                item_title = str(
+                    item.get("title") or item.get("name") or item.get("original_title") or item.get("original_name") or ""
+                ).strip()
+                release = str(item.get("release_date") or item.get("first_air_date") or "")
+                item_year = release[:4]
+                if target_title and item_title.casefold() == target_title and (
+                    not target_year or item_year == target_year
+                ):
+                    selected = item
+                    break
+            selected = selected or results[0]
+
+            backdrop_path = selected.get("backdrop_path")
+            poster_path = selected.get("poster_path")
+            backdrop_url = (
+                f"https://image.tmdb.org/t/p/w1280{backdrop_path}"
+                if backdrop_path else None
+            )
+            poster_url = (
+                f"https://image.tmdb.org/t/p/w780{poster_path}"
+                if poster_path else None
+            )
+            return backdrop_url, poster_url
+    except Exception as exc:
+        print(f"TMDB Banner Image Lookup Error [{imdb_id}]: {exc}", flush=True)
+        return None, None
+
+
+async def _download_image(url):
+    if not url:
+        return None
+    try:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT, headers=IMDB_HEADERS) as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    return None
+                raw = await response.read()
+        return Image.open(io.BytesIO(raw)).convert("RGB")
+    except Exception as exc:
+        print(f"IMDb Banner Image Download Error: {exc}", flush=True)
+        return None
+
+
+async def create_imdb_banner(info, bot_username):
+    """Create the cinematic 16:9 IMDb card shown in the supplied reference."""
+    backdrop_url, tmdb_poster_url = await fetch_tmdb_backdrop_and_poster(
+        info.get("id"),
+        info.get("title"),
+        info.get("year"),
+    )
+
+    background = await _download_image(backdrop_url)
+    if background is None and info.get("poster"):
+        background = await _download_image(info.get("poster"))
+
+    if background is None:
+        background = Image.new("RGB", (BANNER_WIDTH, BANNER_HEIGHT), (25, 25, 25))
+
+    background = _cover_image(background, (BANNER_WIDTH, BANNER_HEIGHT))
+    # Soft blur + cinematic darkening. Keep enough detail visible behind text.
+    background = background.filter(ImageFilter.GaussianBlur(radius=1.8))
+    canvas = background.convert("RGBA")
+
+    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay, "RGBA")
+    # Left-to-right dark gradient so the text remains readable while the right
+    # side keeps the poster/backdrop visible.
+    for x in range(BANNER_WIDTH):
+        ratio = x / max(BANNER_WIDTH - 1, 1)
+        alpha = int(175 - (ratio * 70))
+        od.line((x, 0, x, BANNER_HEIGHT), fill=(0, 0, 0, max(70, alpha)))
+    od.rectangle((0, 0, BANNER_WIDTH, BANNER_HEIGHT), fill=(0, 0, 0, 38))
+    canvas = Image.alpha_composite(canvas, overlay)
+
+    draw = ImageDraw.Draw(canvas, "RGBA")
+
+    # Fonts
+    title_font = _font(64, True)
+    rating_font = _font(30, True)
+    body_font = _font(24, False)
+    body_bold = _font(25, True)
+    pill_font = _font(22, True)
+    small_font = _font(19, True)
+    brand_font = _font(26, True)
+
+    left_x = 68
+    text_right = 1040
+    max_text_width = text_right - left_x
+
+    title = clean_text(info.get("title"), "Unknown Title")
+    title_text = _fit_text(draw, title.upper(), title_font, max_text_width - 220)
+    title_y = 205
+    draw.text((left_x + 3, title_y + 4), title_text, font=title_font, fill=(0, 0, 0, 170))
+    draw.text((left_x, title_y), title_text, font=title_font, fill=(255, 255, 255, 255))
+
+    # IMDb rating badge beside the title.
+    rating = clean_text(info.get("rating"), "N/A")
+    rating_x = left_x + min(
+        draw.textbbox((0, 0), title_text, font=title_font)[2] + 24,
+        max_text_width - 190,
+    )
+    draw.text((rating_x, title_y + 15), "★", font=_font(30, True), fill=(255, 193, 61, 255))
+    draw.text((rating_x + 33, title_y + 16), rating, font=rating_font, fill=(255, 255, 255, 255))
+    imdb_box_x = rating_x + 105
+    draw.rounded_rectangle(
+        (imdb_box_x, title_y + 12, imdb_box_x + 78, title_y + 52),
+        radius=10,
+        fill=(245, 190, 35, 235),
+    )
+    draw.text((imdb_box_x + 11, title_y + 18), "IMDb", font=small_font, fill=(0, 0, 0, 255))
+
+    # Underline accent below title.
+    title_bbox = draw.textbbox((left_x, title_y), title_text, font=title_font)
+    underline_w = min(165, max(95, title_bbox[2] - left_x))
+    draw.rounded_rectangle(
+        (left_x, title_bbox[3] + 6, left_x + underline_w, title_bbox[3] + 11),
+        radius=3,
+        fill=(205, 147, 82, 255),
+    )
+
+    storyline = clean_text(info.get("storyline"), "No storyline available.")
+    story_font = body_bold
+    story_lines = _wrap_text(draw, storyline, story_font, max_text_width, max_lines=4)
+    story_y = 330
+    for index, line in enumerate(story_lines):
+        draw.text(
+            (left_x + 2, story_y + index * 43),
+            line,
+            font=story_font,
+            fill=(255, 255, 255, 245),
+            stroke_width=1,
+            stroke_fill=(0, 0, 0, 125),
+        )
+
+    # Information pills.
+    pill_y = 510
+    pill_x = left_x
+    certificate = normalize_certificate(info.get("certificate")) or "Not Rated"
+    runtime = clean_text(info.get("runtime"), "N/A")
+    year = clean_text(info.get("year"), "N/A")
+    genres = unique_strings(info.get("genres") or [])
+
+    for text_value, special in [
+        (certificate, "cert"),
+        (f"{rating} IMDb", "rating"),
+        (runtime, "normal"),
+    ]:
+        fill = (35, 35, 35, 175) if special != "rating" else (255, 255, 255, 185)
+        text_fill = (255, 255, 255, 255) if special != "rating" else (25, 25, 25, 255)
+        rect = _draw_pill(
+            canvas,
+            (pill_x, pill_y),
+            text_value,
+            pill_font,
+            fill=fill,
+            outline=(255, 255, 255, 100),
+            text_fill=text_fill,
+            padding_x=18,
+            padding_y=8,
+            radius=20,
+        )
+        pill_x = rect[2] + 12
+
+    for genre in genres[:3]:
+        rect = _draw_pill(
+            canvas,
+            (pill_x, pill_y),
+            genre.upper(),
+            pill_font,
+            fill=(255, 255, 255, 75),
+            outline=(255, 255, 255, 90),
+            text_fill=(255, 255, 255, 255),
+            padding_x=17,
+            padding_y=8,
+            radius=20,
+        )
+        pill_x = rect[2] + 12
+
+    _draw_pill(
+        canvas,
+        (pill_x, pill_y),
+        year,
+        pill_font,
+        fill=(255, 255, 255, 175),
+        outline=(255, 255, 255, 100),
+        text_fill=(30, 30, 30, 255),
+        padding_x=20,
+        padding_y=8,
+        radius=20,
+    )
+
+    # Telegram source badge.
+    source_y = 610
+    source_text = BANNER_CHANNEL
+    _draw_pill(
+        canvas,
+        (left_x, source_y),
+        source_text,
+        brand_font,
+        fill=(60, 60, 60, 155),
+        outline=(255, 255, 255, 110),
+        text_fill=(255, 255, 255, 255),
+        padding_x=28,
+        padding_y=11,
+        radius=34,
+    )
+
+    # Poster card on the right.
+    poster = None
+    if tmdb_poster_url:
+        poster = await _download_image(tmdb_poster_url)
+    if poster is None and info.get("poster"):
+        poster = await _download_image(info.get("poster"))
+
+    poster_box = (1125, 160, 1482, 704)
+    px1, py1, px2, py2 = poster_box
+    card_w = px2 - px1
+    card_h = py2 - py1
+
+    # Shadow
+    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow, "RGBA")
+    sd.rounded_rectangle(
+        (px1 + 10, py1 + 14, px2 + 10, py2 + 14),
+        radius=22,
+        fill=(0, 0, 0, 145),
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(12))
+    canvas = Image.alpha_composite(canvas, shadow)
+    draw = ImageDraw.Draw(canvas, "RGBA")
+
+    if poster is not None:
+        inner_w = card_w - 14
+        inner_h = card_h - 14
+        poster = _cover_image(poster, (inner_w, inner_h))
+        mask = _rounded_mask((inner_w, inner_h), 17)
+        poster_rgba = poster.convert("RGBA")
+        poster_rgba.putalpha(mask)
+        canvas.alpha_composite(poster_rgba, (px1 + 7, py1 + 7))
+
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    draw.rounded_rectangle(
+        poster_box,
+        radius=23,
+        outline=(255, 255, 255, 245),
+        width=7,
+    )
+
+    # Bot branding at bottom right.
+    bot_label = "@" + str(bot_username or "CinemaVetaBot").lstrip("@")
+    bot_font = _font(28, True)
+    bbox = draw.textbbox((0, 0), bot_label, font=bot_font)
+    bw = bbox[2] - bbox[0] + 46
+    bh = bbox[3] - bbox[1] + 24
+    bx = BANNER_WIDTH - bw - 70
+    by = BANNER_HEIGHT - bh - 38
+    draw.rounded_rectangle(
+        (bx, by, bx + bw, by + bh),
+        radius=30,
+        fill=(55, 55, 55, 170),
+        outline=(255, 255, 255, 90),
+        width=1,
+    )
+    draw.text(
+        (bx + 23, by + 12),
+        bot_label,
+        font=bot_font,
+        fill=(255, 255, 255, 255),
+    )
+
+    output = io.BytesIO()
+    canvas.convert("RGB").save(output, format="JPEG", quality=94, optimize=True)
+    output.seek(0)
+    output.name = "imdb_banner.jpg"
+    return output
+
+
+# ============================================================
 # /imdb command
 # ============================================================
 
@@ -1523,7 +1956,23 @@ async def imdb_view_callback(client, query: CallbackQuery):
 
         sent = False
 
-        if info.get("poster"):
+        # Generate the custom cinematic banner instead of sending the raw
+        # IMDb poster. If banner generation fails, fall back to the original
+        # IMDb poster so /imdb never becomes unusable because of Pillow/TMDB.
+        try:
+            banner = await create_imdb_banner(info, bot_user)
+            await client.send_photo(
+                chat_id=orig_message.chat.id,
+                photo=banner,
+                caption=final_caption,
+                reply_markup=reply_markup,
+                reply_to_message_id=orig_message.id,
+            )
+            sent = True
+        except Exception as banner_error:
+            print(f"IMDb Custom Banner Error: {banner_error}", flush=True)
+
+        if not sent and info.get("poster"):
             try:
                 await client.send_photo(
                     chat_id=orig_message.chat.id,
