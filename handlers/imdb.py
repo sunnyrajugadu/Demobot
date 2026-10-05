@@ -10,6 +10,7 @@ from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineK
 
 from bot import app
 from utils.helpers import normalize_text
+from utils.imdb_banner import create_imdb_banner
 
 
 print("✅ handlers/imdb.py imported (IMDb Full Metadata Fix)", flush=True)
