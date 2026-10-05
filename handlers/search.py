@@ -191,21 +191,36 @@ def get_file_display_name(file):
 # ============================================================
 
 SEARCH_STOP_WORDS = {
-    # Generic title words that are frequently omitted/reordered in stored
-    # release filenames and therefore should not be mandatory for matching.
+    # Common grammatical words. They are not reliable identifiers in release
+    # filenames and therefore are never required for an IMDb match.
     "the", "a", "an", "of", "and", "or", "to", "in", "on",
     "for", "from", "with", "at", "by",
-    # IMDb may call a sequel "Part 2", while release filenames commonly
-    # use only the numeric form: "Movie 2". Treat "Part" as release/title
-    # metadata, not as a required identity token.
+    # IMDb titles can use "Part 1/2", while releases often use only "1/2"
+    # or omit the word completely.
     "part", "chapter", "episode",
 }
 
 
 def normalize_search_value(value):
+    """Normalize text for movie identity matching.
+
+    Punctuation, dots, dashes, brackets, underscores and symbols are all
+    treated as separators. Therefore these are equivalent for matching:
+
+        Pushpa - The Rise
+        Pushpa. The.Rise.
+        Pushpa_The_Rise
+        Pushpa: The Rise
+    """
     value = str(value or "").lower()
-    value = re.sub(r"[\W_]+", " ", value, flags=re.UNICODE)
+
+    # Replace every non-alphanumeric Unicode character with a space.
+    # This deliberately ignores punctuation/symbols instead of making them
+    # part of the movie identity.
+    value = re.sub(r"[^\w\d]+", " ", value, flags=re.UNICODE)
+    value = re.sub(r"_+", " ", value)
     value = re.sub(r"\s+", " ", value).strip()
+
     return value
 
 
@@ -240,58 +255,139 @@ def movie_text_for_matching(file):
 def movie_years(file):
     years = set()
 
-    for key in ("year", "movie_name", "file_name", "original_file_name", "caption"):
+    for key in (
+        "year",
+        "movie_name",
+        "file_name",
+        "original_file_name",
+        "caption"
+    ):
         value = file.get(key)
         if isinstance(value, (list, tuple, set)):
             value = " ".join(str(x) for x in value)
-        for year in re.findall(r"\b(19\d{2}|20\d{2})\b", str(value or "")):
+
+        for year in re.findall(
+            r"\b(19\d{2}|20\d{2})\b",
+            str(value or "")
+        ):
             years.add(year)
 
     return years
 
 
 def title_tokens(title):
+    """Return meaningful canonical title tokens.
+
+    Stop words are omitted so that an IMDb title like
+    "Pushpa The Rise" still matches filenames where "The" is absent.
+    Numeric tokens are retained because sequel numbers are important.
+    """
     normalized = normalize_search_value(imdb_core_title(title))
+
     return [
-        token for token in normalized.split()
-        if token not in SEARCH_STOP_WORDS or token.isdigit()
+        token
+        for token in normalized.split()
+        if token not in SEARCH_STOP_WORDS
     ]
 
 
+def title_match_tokens(canonical_title):
+    """Build token alternatives used for release-name matching.
+
+    This handles the common IMDb/release difference:
+        IMDb:    Movie Part 2
+        Release: Movie 2
+        Release: Movie Part 2
+
+    """
+    tokens = title_tokens(canonical_title)
+    expanded = list(tokens)
+
+    # Numeric sequel tokens remain mandatory. "Part" itself is optional.
+    return expanded
+
+
 def release_variant_score(file, canonical_title, target_year=None):
+    """Score one DB file against an IMDb-selected canonical title.
+
+    Matching rules:
+      * punctuation/symbols/dashes/dots are ignored
+      * title can occur at the beginning, middle or end of the filename
+      * release metadata after/before the title is allowed
+      * "Part" is optional when a numeric sequel is present
+      * all meaningful title tokens must be present (80% minimum retained)
+      * selected IMDb year is strict when available
+    """
     text = movie_text_for_matching(file)
     if not text:
         return 0
 
-    tokens = title_tokens(canonical_title)
-    if not tokens:
+    canonical_normalized = normalize_search_value(
+        imdb_core_title(canonical_title)
+    )
+    tokens = title_match_tokens(canonical_title)
+
+    if not canonical_normalized or not tokens:
         return 0
 
-    matched = sum(1 for token in tokens if re.search(rf"\b{re.escape(token)}\b", text))
-    coverage = matched / len(tokens)
+    # Strongest match: normalized canonical title appears as a contiguous
+    # phrase anywhere in the stored filename. This naturally handles:
+    #   "Pushpa - The Rise"
+    #   "Pushpa. The.Rise. Part 1"
+    phrase_match = canonical_normalized in text
 
-    # For an IMDb selection, every meaningful title token should be
-    # present. This prevents unrelated movies from leaking into results.
-    if coverage < 0.80:
+    matched_tokens = 0
+    for token in tokens:
+        if re.search(rf"\b{re.escape(token)}\b", text, re.IGNORECASE):
+            matched_tokens += 1
+
+    coverage = matched_tokens / len(tokens)
+
+    # A title match must contain the meaningful identity tokens. This keeps
+    # short/common words from returning unrelated movies.
+    if not phrase_match and coverage < 0.80:
         return 0
 
-    score = matched * 10
+    # Prefer exact normalized phrase matches, while still allowing harmless
+    # release differences such as "Part 1", brackets, codec tags, etc.
+    score = matched_tokens * 100
+    if phrase_match:
+        score += 1000
 
     if target_year:
         if target_year in movie_years(file):
-            score += 100
+            score += 5000
         else:
-            # Year was explicitly selected; do not return a different year
-            # merely because its title happens to be similar.
+            # If IMDb selected a year, do not mix another movie/year into it.
             return 0
 
     return score
 
 
+def _db_dedupe_key(row):
+    row_id = str(
+        row.get("_id")
+        or row.get("file_unique_id")
+        or row.get("file_id")
+        or ""
+    )
+
+    if row_id:
+        return row_id
+
+    return (
+        f"{row.get('file_name', '')}::"
+        f"{row.get('file_size_bytes', row.get('file_size', 0))}"
+    )
+
+
 async def search_imdb_release_variants(movie_name, limit=500):
-    """
-    Search the database for release variants belonging to the selected
-    IMDb movie, instead of treating the IMDb title as an exact filename.
+    """Find ALL release variants for the selected IMDb movie.
+
+    The database search is deliberately broader than an exact IMDb-title
+    search. We retrieve candidates using normalized title tokens and then
+    perform the final identity/year check in Python. This makes punctuation,
+    filename placement and release tags irrelevant to the match.
     """
     canonical = imdb_core_title(movie_name)
     target_year = extract_search_year(movie_name)
@@ -301,73 +397,66 @@ async def search_imdb_release_variants(movie_name, limit=500):
 
     candidates = []
     seen_ids = set()
+    tokens = title_match_tokens(canonical)
+    normalized_canonical = normalize_search_value(canonical)
 
-    # First pass: normal AND-token search. This is indexed/fast and should
-    # find the common case immediately.
-    queries = [canonical]
+    # Query 1: full canonical title. database.search_files() already
+    # normalizes punctuation, so this is fast for the common case.
+    queries = []
+    if normalized_canonical:
+        queries.append(normalized_canonical)
 
-    # If punctuation/order/stop-word differences are involved, also try a
-    # compact query containing the strongest title tokens.
-    tokens = title_tokens(canonical)
-    if tokens:
-        compact = " ".join(tokens)
-        if compact and compact.lower() != canonical.lower():
-            queries.append(compact)
+    # Query 2: meaningful tokens only. This catches filenames where IMDb's
+    # grammatical words are omitted or the release adds "Part" metadata.
+    compact = " ".join(tokens)
+    if compact and compact not in queries:
+        queries.append(compact)
 
-    for q in queries:
+    async def collect(query):
         try:
-            rows = await search_files(q, limit=limit)
+            rows = await search_files(query, limit=limit)
         except Exception as e:
-            print(f"⚠️ IMDb variant DB search error for {q!r}: {e}", flush=True)
-            continue
+            print(
+                f"⚠️ IMDb variant DB search error for {query!r}: {e}",
+                flush=True
+            )
+            return
 
         for row in rows or []:
-            row_id = str(row.get("_id") or row.get("file_unique_id") or row.get("file_id") or "")
-            dedupe_key = row_id or (
-                f"{row.get('file_name','')}::{row.get('file_size_bytes', row.get('file_size', 0))}"
-            )
+            dedupe_key = _db_dedupe_key(row)
             if dedupe_key in seen_ids:
                 continue
 
-            score = release_variant_score(row, canonical, target_year)
+            score = release_variant_score(
+                row,
+                canonical,
+                target_year
+            )
             if score <= 0:
                 continue
 
             seen_ids.add(dedupe_key)
             candidates.append((score, row))
 
-    # If the regular DB query found nothing because punctuation/word order is
-    # unusual, use individual strong tokens as a broader fallback. Results
-    # are still strictly scored before being accepted.
-    if not candidates and tokens:
-        strong_tokens = [t for t in tokens if len(t) >= 2]
-        for token in strong_tokens[:6]:
-            try:
-                rows = await search_files(token, limit=limit)
-            except Exception:
+    for query in queries:
+        await collect(query)
+
+    # Broad fallback: search each meaningful token individually and UNION the
+    # candidates. This is important when Mongo's full-token query misses a
+    # release because the title words are stored in an unusual arrangement.
+    # Final scoring still requires the complete movie identity, so unrelated
+    # files are rejected.
+    if tokens and len(candidates) < min(20, limit):
+        for token in tokens:
+            if len(token) < 2:
                 continue
+            await collect(token)
 
-            for row in rows or []:
-                row_id = str(row.get("_id") or row.get("file_unique_id") or row.get("file_id") or "")
-                dedupe_key = row_id or (
-                    f"{row.get('file_name','')}::{row.get('file_size_bytes', row.get('file_size', 0))}"
-                )
-                if dedupe_key in seen_ids:
-                    continue
-
-                score = release_variant_score(row, canonical, target_year)
-                if score <= 0:
-                    continue
-
-                seen_ids.add(dedupe_key)
-                candidates.append((score, row))
-
-    # Highest canonical-title match first, then newest indexed document.
     candidates.sort(
         key=lambda item: (
             item[0],
             item[1].get("indexed_at", 0) or 0,
-            item[1].get("_id") or ""
+            str(item[1].get("_id") or "")
         ),
         reverse=True
     )
