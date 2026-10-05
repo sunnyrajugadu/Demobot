@@ -169,6 +169,206 @@ def get_file_display_name(file):
     return "Movie"
 
 
+# ============================================================
+# IMDb TITLE -> DATABASE RELEASE VARIANT SEARCH
+# ============================================================
+#
+# IMPORTANT:
+# An IMDb result is the canonical movie title, NOT the exact
+# filename stored in Telegram.
+#
+# Example IMDb title:
+#     Pushpa 2: The Rule (2024)
+#
+# Database may contain:
+#     Pushpa 2 The Rule (Reloaded Version) (2024) [Tamil].mkv
+#     Pushpa 2 The Rule (2024) Telugu 720p WEBRip HEVC.mkv
+#     Pushpa 2 The Rule (2024) Malayalam WEBRip x264 AA.mkv
+#
+# All three MUST be returned. Release tags are intentionally
+# treated as extra filename metadata, not as part of the movie
+# identity.
+# ============================================================
+
+SEARCH_STOP_WORDS = {
+    "the", "a", "an", "of", "and", "or", "to", "in", "on",
+    "for", "from", "with", "at", "by"
+}
+
+
+def normalize_search_value(value):
+    value = str(value or "").lower()
+    value = re.sub(r"[\W_]+", " ", value, flags=re.UNICODE)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
+def extract_search_year(value):
+    match = re.search(r"\b(19\d{2}|20\d{2})\b", str(value or ""))
+    return match.group(1) if match else None
+
+
+def imdb_core_title(value):
+    """Return canonical IMDb title without its trailing release year."""
+    value = str(value or "").strip()
+    value = re.sub(r"\s*\((19\d{2}|20\d{2})\)\s*$", "", value)
+    value = re.sub(r"\s*[-–—]\s*(19\d{2}|20\d{2})\s*$", "", value)
+    value = re.sub(r"\s+(19\d{2}|20\d{2})\s*$", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def movie_text_for_matching(file):
+    return normalize_search_value(
+        " ".join(
+            str(file.get(key) or "")
+            for key in (
+                "movie_name",
+                "file_name",
+                "original_file_name",
+                "caption"
+            )
+        )
+    )
+
+
+def movie_years(file):
+    years = set()
+
+    for key in ("year", "movie_name", "file_name", "original_file_name", "caption"):
+        value = file.get(key)
+        if isinstance(value, (list, tuple, set)):
+            value = " ".join(str(x) for x in value)
+        for year in re.findall(r"\b(19\d{2}|20\d{2})\b", str(value or "")):
+            years.add(year)
+
+    return years
+
+
+def title_tokens(title):
+    normalized = normalize_search_value(imdb_core_title(title))
+    return [
+        token for token in normalized.split()
+        if token not in SEARCH_STOP_WORDS or token.isdigit()
+    ]
+
+
+def release_variant_score(file, canonical_title, target_year=None):
+    text = movie_text_for_matching(file)
+    if not text:
+        return 0
+
+    tokens = title_tokens(canonical_title)
+    if not tokens:
+        return 0
+
+    matched = sum(1 for token in tokens if re.search(rf"\b{re.escape(token)}\b", text))
+    coverage = matched / len(tokens)
+
+    # For an IMDb selection, every meaningful title token should be
+    # present. This prevents unrelated movies from leaking into results.
+    if coverage < 0.80:
+        return 0
+
+    score = matched * 10
+
+    if target_year:
+        if target_year in movie_years(file):
+            score += 100
+        else:
+            # Year was explicitly selected; do not return a different year
+            # merely because its title happens to be similar.
+            return 0
+
+    return score
+
+
+async def search_imdb_release_variants(movie_name, limit=500):
+    """
+    Search the database for release variants belonging to the selected
+    IMDb movie, instead of treating the IMDb title as an exact filename.
+    """
+    canonical = imdb_core_title(movie_name)
+    target_year = extract_search_year(movie_name)
+
+    if not canonical:
+        return [], canonical, target_year
+
+    candidates = []
+    seen_ids = set()
+
+    # First pass: normal AND-token search. This is indexed/fast and should
+    # find the common case immediately.
+    queries = [canonical]
+
+    # If punctuation/order/stop-word differences are involved, also try a
+    # compact query containing the strongest title tokens.
+    tokens = title_tokens(canonical)
+    if tokens:
+        compact = " ".join(tokens)
+        if compact and compact.lower() != canonical.lower():
+            queries.append(compact)
+
+    for q in queries:
+        try:
+            rows = await search_files(q, limit=limit)
+        except Exception as e:
+            print(f"⚠️ IMDb variant DB search error for {q!r}: {e}", flush=True)
+            continue
+
+        for row in rows or []:
+            row_id = str(row.get("_id") or row.get("file_unique_id") or row.get("file_id") or "")
+            dedupe_key = row_id or (
+                f"{row.get('file_name','')}::{row.get('file_size_bytes', row.get('file_size', 0))}"
+            )
+            if dedupe_key in seen_ids:
+                continue
+
+            score = release_variant_score(row, canonical, target_year)
+            if score <= 0:
+                continue
+
+            seen_ids.add(dedupe_key)
+            candidates.append((score, row))
+
+    # If the regular DB query found nothing because punctuation/word order is
+    # unusual, use individual strong tokens as a broader fallback. Results
+    # are still strictly scored before being accepted.
+    if not candidates and tokens:
+        strong_tokens = [t for t in tokens if len(t) >= 2]
+        for token in strong_tokens[:6]:
+            try:
+                rows = await search_files(token, limit=limit)
+            except Exception:
+                continue
+
+            for row in rows or []:
+                row_id = str(row.get("_id") or row.get("file_unique_id") or row.get("file_id") or "")
+                dedupe_key = row_id or (
+                    f"{row.get('file_name','')}::{row.get('file_size_bytes', row.get('file_size', 0))}"
+                )
+                if dedupe_key in seen_ids:
+                    continue
+
+                score = release_variant_score(row, canonical, target_year)
+                if score <= 0:
+                    continue
+
+                seen_ids.add(dedupe_key)
+                candidates.append((score, row))
+
+    # Highest canonical-title match first, then newest indexed document.
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            item[1].get("indexed_at", 0) or 0,
+            item[1].get("_id") or ""
+        ),
+        reverse=True
+    )
+
+    return [row for _, row in candidates[:limit]], canonical, target_year
+
+
 # ================= SEARCH LOG =================
 
 async def log_search(
@@ -772,51 +972,67 @@ async def execute_search(
         # ====================================================
         # 5. DATABASE SEARCH
         # ====================================================
+        #
+        # Normal user text keeps the existing fast search behaviour.
+        # IMDb-selected titles use release-variant matching so that
+        # filenames containing extra release tags are NOT rejected.
+        # ====================================================
 
-        results = await search_files(
-            movie_name
-        )
-
-
-        # Existing fallback:
-        # Movie - Year -> Movie
-
-        if not results and "-" in movie_name:
-
-            clean_name = (
-                movie_name
-                .split("-")[0]
-                .strip()
+        if allow_spelling_suggestions is False:
+            results, selected_canonical_title, selected_year = (
+                await search_imdb_release_variants(
+                    movie_name,
+                    limit=500
+                )
             )
 
-            if clean_name:
-                results = await search_files(
-                    clean_name
+            if selected_canonical_title:
+                imdb_search_query = selected_canonical_title
+
+            if selected_year:
+                has_explicit_year = True
+                target_year = selected_year
+        else:
+            results = await search_files(
+                movie_name,
+                limit=500
+            )
+
+            # Existing fallback: Movie - Year -> Movie
+            if not results and "-" in movie_name:
+                clean_name = (
+                    movie_name
+                    .split("-")[0]
+                    .strip()
                 )
 
+                if clean_name:
+                    results = await search_files(
+                        clean_name,
+                        limit=500
+                    )
 
         # ====================================================
-        # 6. STRICT YEAR FILTER
+        # 6. STRICT YEAR FILTER FOR NORMAL SEARCHES
+        # ====================================================
+        # IMDb-selected searches already enforce the selected year inside
+        # search_imdb_release_variants(). Do not apply a second lossy filter.
         # ====================================================
 
         if (
-            has_explicit_year
+            allow_spelling_suggestions is not False
+            and has_explicit_year
             and target_year
         ):
-
             filtered_results = []
 
             for f in results:
-
                 f_name = (
                     f.get("movie_name")
                     or f.get("file_name")
                     or ""
                 )
-
-                f_year = str(
-                    f.get("year", "")
-                )
+                f_year = str(f.get("year", ""))
 
                 if (
                     target_year in f_name
@@ -1064,7 +1280,8 @@ async def execute_search(
 
 
         imdb_search_query = (
-            base_movie_name
+            locals().get("imdb_search_query")
+            or base_movie_name
             .split("-")[0]
             .strip()
         )
