@@ -13,7 +13,6 @@ TMDB_API_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/"
 
 TMDB_KEY = "7f43669a428c09611a0518fa9c0bbddb"
-TOMATO_ICON_URL = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f345.png"
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(
     total=15,
@@ -114,6 +113,32 @@ def _font(size, bold=False):
 # ============================================================
 # Image helpers
 # ============================================================
+
+def _get_dominant_color(image):
+    """Gets the average color of the image to tint pills perfectly."""
+    if not image:
+        return (205, 147, 82)
+    try:
+        avg = image.resize((1, 1), Image.Resampling.LANCZOS).getpixel((0, 0))
+        if isinstance(avg, int):
+            return (avg, avg, avg)
+        if len(avg) >= 3:
+            r, g, b = avg[:3]
+            
+            # Boost brightness for readability & aesthetics
+            r = min(255, int(r * 1.5))
+            g = min(255, int(g * 1.5))
+            b = min(255, int(b * 1.5))
+            
+            # Prevent pure black/too dark
+            if max(r, g, b) < 90:
+                r, g, b = 100, 100, 100
+                
+            return (r, g, b)
+    except:
+        pass
+    return (205, 147, 82)
+
 
 def _cover_image(image, size):
     image = image.convert("RGB")
@@ -238,7 +263,6 @@ def _draw_pill(
     padding_x=18,
     padding_y=9,
     radius=22,
-    icon=None
 ):
     draw = ImageDraw.Draw(base, "RGBA")
     x, y = xy
@@ -248,23 +272,10 @@ def _draw_pill(
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
 
-    icon_w, icon_h = 0, 0
-    icon_padding = 0
-    
-    if icon:
-        target_h = int(th * 1.1)
-        ratio = target_h / icon.height
-        target_w = int(icon.width * ratio)
-        icon = icon.resize((target_w, target_h), Image.Resampling.LANCZOS)
-        icon_w, icon_h = icon.size
-        icon_padding = 8
-
-    total_w = tw + icon_w + icon_padding
-
     rect = (
         x,
         y,
-        x + total_w + padding_x * 2,
+        x + tw + padding_x * 2,
         y + th + padding_y * 2,
     )
 
@@ -276,14 +287,8 @@ def _draw_pill(
         width=1,
     )
 
-    text_x = x + padding_x
-    if icon:
-        icon_y = y + padding_y + (th - icon_h) // 2
-        base.alpha_composite(icon, (int(text_x), int(icon_y)))
-        text_x += icon_w + icon_padding
-
     draw.text(
-        (text_x, y + padding_y - bbox[1]),
+        (x + padding_x, y + padding_y - bbox[1]),
         text,
         font=font,
         fill=text_fill,
@@ -389,7 +394,7 @@ async def fetch_tmdb_backdrop_and_poster(
             backdrop_path = selected.get("backdrop_path")
             poster_path = selected.get("poster_path")
 
-            # Updated to fetch 'original' high quality images
+            # Fetch 'original' high quality images
             backdrop_url = (
                 f"{TMDB_IMAGE_BASE}original{backdrop_path}"
                 if backdrop_path
@@ -436,7 +441,6 @@ async def _download_image(url, keep_alpha=False):
 
         img = Image.open(io.BytesIO(raw))
         
-        # Support transparent PNGs if keep_alpha is True
         if keep_alpha and img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
             return img.convert("RGBA")
             
@@ -463,65 +467,54 @@ async def create_imdb_banner(info):
     rating = clean_text(info.get("rating"), "N/A")
     runtime = clean_text(info.get("runtime"), "N/A")
     storyline = clean_text(info.get("storyline"), "No storyline available.")
-    certificate = normalize_certificate(info.get("certificate")) or "Not Rated"
     genres = unique_strings(info.get("genres") or [])
 
     # --------------------------------------------------------
-    # Fetch TMDB backdrop + poster
+    # Fetch TMDB backdrop + poster (Fallback to IMDb)
     # --------------------------------------------------------
-
-    backdrop_url, tmdb_poster_url = (
-        await fetch_tmdb_backdrop_and_poster(
-            imdb_id,
-            title,
-            year,
-        )
-    )
-
-    # --------------------------------------------------------
-    # Background
-    # --------------------------------------------------------
+    backdrop_url, tmdb_poster_url = await fetch_tmdb_backdrop_and_poster(imdb_id, title, year)
 
     background = await _download_image(backdrop_url)
-
     if background is None:
         background = await _download_image(info.get("poster"))
 
     if background is None:
-        background = Image.new(
-            "RGB",
-            (BANNER_WIDTH, BANNER_HEIGHT),
-            (25, 25, 25),
-        )
+        background = Image.new("RGB", (BANNER_WIDTH, BANNER_HEIGHT), (25, 25, 25))
 
-    background = _cover_image(
-        background,
-        (BANNER_WIDTH, BANNER_HEIGHT),
-    )
-
-    background = background.filter(ImageFilter.GaussianBlur(radius=1.5))
+    background = _cover_image(background, (BANNER_WIDTH, BANNER_HEIGHT))
+    background = background.filter(ImageFilter.GaussianBlur(radius=1.2))
+    
+    # Extract Dominant Color for dynamic elements
+    dom_r, dom_g, dom_b = _get_dominant_color(background)
+    
+    # Setup dynamic colors
+    pill_fill = (dom_r, dom_g, dom_b, 195)
+    pill_outline = (dom_r, dom_g, dom_b, 255)
+    dynamic_highlight = (dom_r, dom_g, dom_b, 255)
+    
     canvas = background.convert("RGBA")
 
     # --------------------------------------------------------
-    # Cinematic dark overlay
+    # Cinematic dark overlay (Gradient fade style)
     # --------------------------------------------------------
-
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay, "RGBA")
 
-    # Adjusted for lighter backdrop opacity matching 2nd image
-    for x in range(BANNER_WIDTH):
-        ratio = x / max(BANNER_WIDTH - 1, 1)
-        alpha = int(140 - (ratio * 110))
-        od.line(
-            (x, 0, x, BANNER_HEIGHT),
-            fill=(0, 0, 0, max(30, alpha)),
-        )
+    left_x = 68
+    text_right = 1040
+    fade_end = text_right + 50
 
-    od.rectangle(
-        (0, 0, BANNER_WIDTH, BANNER_HEIGHT),
-        fill=(0, 0, 0, 15),
-    )
+    # Gradient overlay ONLY where text sits, fading out towards the poster
+    for x in range(BANNER_WIDTH):
+        if x < fade_end:
+            ratio = x / fade_end
+            alpha = int(160 * ((1 - ratio) ** 1.3))
+        else:
+            alpha = 0
+        od.line((x, 0, x, BANNER_HEIGHT), fill=(0, 0, 0, alpha))
+
+    # Extremely light global dark tint just to bind it together
+    od.rectangle((0, 0, BANNER_WIDTH, BANNER_HEIGHT), fill=(0, 0, 0, 5))
 
     canvas = Image.alpha_composite(canvas, overlay)
     draw = ImageDraw.Draw(canvas, "RGBA")
@@ -529,225 +522,107 @@ async def create_imdb_banner(info):
     # --------------------------------------------------------
     # Fonts
     # --------------------------------------------------------
-
     title_font = _font(64, True)
     rating_font = _font(30, True)
     body_bold = _font(25, True)
     pill_font = _font(22, True)
     small_font = _font(19, True)
-
-    # --------------------------------------------------------
-    # Main layout
-    # --------------------------------------------------------
-
-    left_x = 68
-    text_right = 1040
+    
     max_text_width = text_right - left_x
 
     # --------------------------------------------------------
-    # Title
+    # Title (Wrapped to multiple lines if long)
     # --------------------------------------------------------
+    # max_lines = 3 allows very long titles to wrap perfectly
+    title_lines = _wrap_text(draw, title.upper(), title_font, max_text_width - 220, max_lines=3)
+    
+    current_y = 160 
+    line_height = 75
+    
+    for idx, line in enumerate(title_lines):
+        # Drop shadow
+        draw.text((left_x + 4, current_y + 5), line, font=title_font, fill=(0, 0, 0, 180))
+        # Main text
+        draw.text((left_x, current_y), line, font=title_font, fill=(255, 255, 255, 255))
+        
+        # Add rating & underline next to the LAST line of the title
+        if idx == len(title_lines) - 1:
+            bbox = draw.textbbox((0, 0), line, font=title_font)
+            last_line_width = bbox[2] - bbox[0]
+            
+            rating_x = left_x + min(last_line_width + 24, max_text_width - 190)
+            
+            # IMDb Rating (★ + Score)
+            draw.text((rating_x, current_y + 15), "★", font=_font(30, True), fill=(255, 193, 61, 255))
+            draw.text((rating_x + 33, current_y + 16), rating, font=rating_font, fill=(255, 255, 255, 255))
 
-    title_text = _fit_text(
-        draw,
-        title.upper(),
-        title_font,
-        max_text_width - 220,
-    )
+            # IMDb Badge (Black bg, Yellow text)
+            imdb_box_x = rating_x + 105
+            draw.rounded_rectangle(
+                (imdb_box_x, current_y + 12, imdb_box_x + 78, current_y + 52),
+                radius=10, fill=(0, 0, 0, 255), outline=(245, 190, 35, 255), width=1
+            )
+            draw.text((imdb_box_x + 13, current_y + 18), "IMDb", font=small_font, fill=(245, 190, 35, 255))
 
-    title_y = 205
+            # Dynamic Line under title
+            underline_w = min(165, max(95, last_line_width))
+            draw.rounded_rectangle(
+                (left_x, current_y + 78, left_x + underline_w, current_y + 83),
+                radius=3, fill=dynamic_highlight
+            )
+            
+        current_y += line_height
 
-    draw.text(
-        (left_x + 4, title_y + 5),
-        title_text,
-        font=title_font,
-        fill=(0, 0, 0, 180),
-    )
-
-    draw.text(
-        (left_x, title_y),
-        title_text,
-        font=title_font,
-        fill=(255, 255, 255, 255),
-    )
-
-    # --------------------------------------------------------
-    # IMDb rating
-    # --------------------------------------------------------
-
-    title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
-    title_width = title_bbox[2] - title_bbox[0]
-
-    rating_x = left_x + min(
-        title_width + 24,
-        max_text_width - 190,
-    )
-
-    draw.text(
-        (rating_x, title_y + 15),
-        "★",
-        font=_font(30, True),
-        fill=(255, 193, 61, 255),
-    )
-
-    draw.text(
-        (rating_x + 33, title_y + 16),
-        rating,
-        font=rating_font,
-        fill=(255, 255, 255, 255),
-    )
-
-    # IMDb Badge (Black bg, Yellow text)
-    imdb_box_x = rating_x + 105
-
-    draw.rounded_rectangle(
-        (
-            imdb_box_x,
-            title_y + 12,
-            imdb_box_x + 78,
-            title_y + 52,
-        ),
-        radius=10,
-        fill=(0, 0, 0, 255),
-        outline=(245, 190, 35, 255),
-        width=1
-    )
-
-    draw.text(
-        (imdb_box_x + 13, title_y + 18),
-        "IMDb",
-        font=small_font,
-        fill=(245, 190, 35, 255),
-    )
 
     # --------------------------------------------------------
-    # Title underline
+    # Storyline (Dynamic Y positioning)
     # --------------------------------------------------------
+    story_y = current_y + 20
+    
+    # Adjust max story lines so they don't overflow the bottom if title is very long
+    max_story_lines = max(1, 5 - len(title_lines))
+    story_lines_wrapped = _wrap_text(draw, storyline, body_bold, max_text_width, max_lines=max_story_lines)
 
-    underline_w = min(165, max(95, title_width))
-    draw.rounded_rectangle(
-        (
-            left_x,
-            title_y + 78,
-            left_x + underline_w,
-            title_y + 83,
-        ),
-        radius=3,
-        fill=(245, 190, 35, 255),
-    )
-
-    # --------------------------------------------------------
-    # Storyline
-    # --------------------------------------------------------
-
-    story_lines = _wrap_text(
-        draw,
-        storyline,
-        body_bold,
-        max_text_width,
-        max_lines=4,
-    )
-
-    story_y = 330
-
-    for index, line in enumerate(story_lines):
+    for index, line in enumerate(story_lines_wrapped):
         draw.text(
             (left_x + 2, story_y + index * 43),
-            line,
-            font=body_bold,
-            fill=(255, 255, 255, 245),
-            stroke_width=1,
-            stroke_fill=(0, 0, 0, 125),
+            line, font=body_bold, fill=(255, 255, 255, 245),
+            stroke_width=1, stroke_fill=(0, 0, 0, 125)
         )
 
     # --------------------------------------------------------
-    # Information pills (Dark theme matching 2nd image)
+    # Information pills (Dynamic Colors & Filtered Content)
     # --------------------------------------------------------
-
-    pill_y = 510
+    pill_y = story_y + (len(story_lines_wrapped) * 43) + 30
     pill_x = left_x
-
-    # Certificate UI
-    rect = _draw_pill(
-        canvas,
-        (pill_x, pill_y),
-        certificate,
-        pill_font,
-        fill=(35, 35, 35, 180),
-        outline=(255, 255, 255, 90),
-        text_fill=(255, 255, 255, 255),
-        padding_x=18,
-        padding_y=8,
-        radius=20,
-    )
-
-    pill_x = rect[2] + 12
-
-    # Tomato-style rating with real transparent PNG
-    tomato_icon = await _download_image(TOMATO_ICON_URL, keep_alpha=True)
-    rating_value = f"{rating}" if rating != "N/A" else "N/A"
     
-    # Fallback to emoji text only if PNG fails to load
-    if not tomato_icon:
-        rating_value = f"🍅 {rating_value}"
+    # Only keep Runtime, Genres(2 max), Year
+    pill_items = []
+    if runtime and runtime != "N/A":
+        pill_items.append(runtime)
+    
+    for genre in genres[:2]:
+        pill_items.append(genre.upper())
+        
+    if year and year != "N/A":
+        pill_items.append(year)
 
-    rect = _draw_pill(
-        canvas,
-        (pill_x, pill_y),
-        rating_value,
-        pill_font,
-        fill=(35, 35, 35, 180),
-        outline=(255, 255, 255, 90),
-        text_fill=(255, 255, 255, 255),
-        padding_x=17,
-        padding_y=8,
-        radius=20,
-        icon=tomato_icon
-    )
-
-    pill_x = rect[2] + 12
-
-    # Runtime
-    rect = _draw_pill(
-        canvas,
-        (pill_x, pill_y),
-        runtime,
-        pill_font,
-        fill=(35, 35, 35, 180),
-        outline=(255, 255, 255, 90),
-        text_fill=(255, 255, 255, 255),
-        padding_x=18,
-        padding_y=8,
-        radius=20,
-    )
-
-    pill_x = rect[2] + 12
-
-    # Genres + Year
-    pill_items = [genre.upper() for genre in genres[:2]]
-    pill_items.append(year)
     pills_right = 1035
 
-    for item_index, item in enumerate(pill_items):
-        item_text = str(item or "").strip()
+    for item in pill_items:
+        item_text = str(item).strip()
         if not item_text or pill_x >= pills_right:
             break
 
         bbox = draw.textbbox((0, 0), item_text, font=pill_font)
         text_width = bbox[2] - bbox[0]
-        padding_x = 20 if item_index == len(pill_items) - 1 else 17
+        padding_x = 18
         pill_width = text_width + (padding_x * 2)
 
         if pill_x + pill_width > pills_right:
             break
 
-        is_year = (item_index == len(pill_items) - 1)
-        
-        # Highlight logic for the Year pill
-        pill_fill = (245, 190, 35, 235) if is_year else (35, 35, 35, 180)
-        pill_text_color = (0, 0, 0, 255) if is_year else (255, 255, 255, 255)
-        pill_outline = (245, 190, 35, 255) if is_year else (255, 255, 255, 90)
-
+        # Apply the dominant color dynamic background!
         rect = _draw_pill(
             canvas,
             (pill_x, pill_y),
@@ -755,19 +630,16 @@ async def create_imdb_banner(info):
             pill_font,
             fill=pill_fill,
             outline=pill_outline,
-            text_fill=pill_text_color,
+            text_fill=(255, 255, 255, 255),
             padding_x=padding_x,
             padding_y=8,
             radius=20,
         )
-
         pill_x = rect[2] + 12
-
 
     # --------------------------------------------------------
     # Poster card
     # --------------------------------------------------------
-
     poster = None
     if tmdb_poster_url:
         poster = await _download_image(tmdb_poster_url)
@@ -796,23 +668,13 @@ async def create_imdb_banner(info):
         inner_w = card_w - 14
         inner_h = card_h - 14
 
-        poster = _cover_image(
-            poster,
-            (inner_w, inner_h),
-        )
-
-        mask = _rounded_mask(
-            (inner_w, inner_h),
-            17,
-        )
+        poster = _cover_image(poster, (inner_w, inner_h))
+        mask = _rounded_mask((inner_w, inner_h), 17)
 
         poster_rgba = poster.convert("RGBA")
         poster_rgba.putalpha(mask)
 
-        canvas.alpha_composite(
-            poster_rgba,
-            (px1 + 7, py1 + 7),
-        )
+        canvas.alpha_composite(poster_rgba, (px1 + 7, py1 + 7))
 
     draw = ImageDraw.Draw(canvas, "RGBA")
     draw.rounded_rectangle(
@@ -822,11 +684,9 @@ async def create_imdb_banner(info):
         width=7,
     )
 
-
     # --------------------------------------------------------
     # Export 100% Quality JPEG
     # --------------------------------------------------------
-
     output = io.BytesIO()
     canvas.convert("RGB").save(
         output,
@@ -839,4 +699,3 @@ async def create_imdb_banner(info):
     output.name = "imdb_banner.jpg"
 
     return output
-
