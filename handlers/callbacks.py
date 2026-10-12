@@ -757,7 +757,7 @@ def language_buttons(
     return [
         [
             InlineKeyboardButton(
-                text=f"Language ({current_lang})",
+                text=f"Language",
                 callback_data=f"open_lang:{search_id}:{timestamp}"
             )
         ]
@@ -809,7 +809,7 @@ def expanded_language_menu(search_id, timestamp):
     buttons.append(
         [
             InlineKeyboardButton(
-                "↪ BACK TO FILES ↩",
+                "↭ BACK TO FILES ↭",
                 callback_data=f"back_files:{search_id}:{timestamp}"
             )
         ]
