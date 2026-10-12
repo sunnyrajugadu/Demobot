@@ -752,8 +752,6 @@ def language_buttons(
     Returns a single button for the main view.
     When clicked, it opens the expanded language menu.
     """
-    current_lang = selected if selected else "All"
-    
     return [
         [
             InlineKeyboardButton(
@@ -1226,7 +1224,7 @@ async def home_about_callback(
                 '✯ <b>𝐂𝐫𝐞𝐚𝐭𝐨𝐫 :</b> '
                 '<a href="https://t.me/mrDuDeHoLic">'
                 '<b>mrDuDeHoLic</b>'
-                '</a>\n\n'
+                '</a>\n\n"
                 "📝 ʟᴀɴɢᴜᴀɢᴇ : Python\n\n"
                 "📡 ʜᴏsᴛᴇᴅ ᴏɴ : VPS\n\n"
                 "🌟 ᴠᴇʀsɪᴏɴ : 2.0"
