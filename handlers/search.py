@@ -193,21 +193,10 @@ SEARCH_STOP_WORDS = {
 
 
 def normalize_search_value(value):
-    """Normalize text for movie identity matching.
-
-    Punctuation, dots, dashes, brackets, underscores and symbols are all
-    treated as separators. Therefore these are equivalent for matching:
-
-        Pushpa - The Rise
-        Pushpa. The.Rise.
-        Pushpa_The_Rise
-        Pushpa: The Rise
-    """
+    """Normalize text for movie identity matching."""
     value = str(value or "").lower()
 
     # Replace every non-alphanumeric Unicode character with a space.
-    # This deliberately ignores punctuation/symbols instead of making them
-    # part of the movie identity.
     value = re.sub(r"[^\w\d]+", " ", value, flags=re.UNICODE)
     value = re.sub(r"_+", " ", value)
     value = re.sub(r"\s+", " ", value).strip()
@@ -223,7 +212,7 @@ def extract_search_year(value):
 def imdb_core_title(value):
     """Return canonical IMDb title without its trailing release year."""
     value = str(value or "").strip()
-    value = re.sub(r"\s*\((19\d{2}|20\d{2})\)\s*$", "", value)
+    value = re.sub(r"\s*\((19\d{2}\vert{}20\d{2})\)\s*$", "", value)
     value = re.sub(r"\s*[-–—]\s*(19\d{2}|20\d{2})\s*$", "", value)
     value = re.sub(r"\s+(19\d{2}|20\d{2})\s*$", "", value)
     return re.sub(r"\s+", " ", value).strip()
@@ -267,12 +256,7 @@ def movie_years(file):
 
 
 def title_tokens(title):
-    """Return meaningful canonical title tokens.
-
-    Stop words are omitted so that an IMDb title like
-    "Pushpa The Rise" still matches filenames where "The" is absent.
-    Numeric tokens are retained because sequel numbers are important.
-    """
+    """Return meaningful canonical title tokens."""
     normalized = normalize_search_value(imdb_core_title(title))
 
     return [
@@ -283,32 +267,14 @@ def title_tokens(title):
 
 
 def title_match_tokens(canonical_title):
-    """Build token alternatives used for release-name matching.
-
-    This handles the common IMDb/release difference:
-        IMDb:    Movie Part 2
-        Release: Movie 2
-        Release: Movie Part 2
-
-    """
+    """Build token alternatives used for release-name matching."""
     tokens = title_tokens(canonical_title)
     expanded = list(tokens)
-
-    # Numeric sequel tokens remain mandatory. "Part" itself is optional.
     return expanded
 
 
 def release_variant_score(file, canonical_title, target_year=None):
-    """Score one DB file against an IMDb-selected canonical title.
-
-    Matching rules:
-      * punctuation/symbols/dashes/dots are ignored
-      * title can occur at the beginning, middle or end of the filename
-      * release metadata after/before the title is allowed
-      * "Part" is optional when a numeric sequel is present
-      * all meaningful title tokens must be present (80% minimum retained)
-      * selected IMDb year is strict when available
-    """
+    """Score one DB file against an IMDb-selected canonical title."""
     text = movie_text_for_matching(file)
     if not text:
         return 0
@@ -321,10 +287,6 @@ def release_variant_score(file, canonical_title, target_year=None):
     if not canonical_normalized or not tokens:
         return 0
 
-    # Strongest match: normalized canonical title appears as a contiguous
-    # phrase anywhere in the stored filename. This naturally handles:
-    #   "Pushpa - The Rise"
-    #   "Pushpa. The.Rise. Part 1"
     phrase_match = canonical_normalized in text
 
     matched_tokens = 0
@@ -334,24 +296,15 @@ def release_variant_score(file, canonical_title, target_year=None):
 
     coverage = matched_tokens / len(tokens)
 
-    # A title match must contain the meaningful identity tokens. This keeps
-    # short/common words from returning unrelated movies.
     if not phrase_match and coverage < 0.80:
         return 0
 
-    # Prefer exact normalized phrase matches, while still allowing harmless
-    # release differences such as "Part 1", brackets, codec tags, etc.
     score = matched_tokens * 100
     if phrase_match:
         score += 1000
 
     if target_year:
         file_years = movie_years(file)
-
-        # IMDb year is only a preference, NEVER a hard requirement.
-        # TV/series releases frequently omit the original year, and episode
-        # filenames may contain other years (air dates, metadata, etc.).
-        # Therefore a title match must survive regardless of filename year.
         if target_year in file_years:
             score += 5000
         else:
@@ -378,13 +331,7 @@ def _db_dedupe_key(row):
 
 
 async def search_imdb_release_variants(movie_name, limit=500):
-    """Find ALL release variants for the selected IMDb movie.
-
-    The database search is deliberately broader than an exact IMDb-title
-    search. We retrieve candidates using normalized title tokens and then
-    perform the final identity/year check in Python. This makes punctuation,
-    filename placement and release tags irrelevant to the match.
-    """
+    """Find ALL release variants for the selected IMDb movie."""
     canonical = imdb_core_title(movie_name)
     target_year = extract_search_year(movie_name)
 
@@ -396,14 +343,10 @@ async def search_imdb_release_variants(movie_name, limit=500):
     tokens = title_match_tokens(canonical)
     normalized_canonical = normalize_search_value(canonical)
 
-    # Query 1: full canonical title. database.search_files() already
-    # normalizes punctuation, so this is fast for the common case.
     queries = []
     if normalized_canonical:
         queries.append(normalized_canonical)
 
-    # Query 2: meaningful tokens only. This catches filenames where IMDb's
-    # grammatical words are omitted or the release adds "Part" metadata.
     compact = " ".join(tokens)
     if compact and compact not in queries:
         queries.append(compact)
@@ -437,11 +380,6 @@ async def search_imdb_release_variants(movie_name, limit=500):
     for query in queries:
         await collect(query)
 
-    # Broad fallback: search each meaningful token individually and UNION the
-    # candidates. This is important when Mongo's full-token query misses a
-    # release because the title words are stored in an unusual arrangement.
-    # Final scoring still requires the complete movie identity, so unrelated
-    # files are rejected.
     if tokens and len(candidates) < min(20, limit):
         for token in tokens:
             if len(token) < 2:
@@ -672,13 +610,7 @@ def pagination_buttons(
 def clean_imdb_title(title):
     """
     Convert IMDb suggestion into a clean searchable movie name.
-
-    Examples:
-        Avatar (2009)       -> Avatar
-        Avatar - 2009       -> Avatar
-        The Batman (2022)   -> The Batman
     """
-
     if not title:
         return ""
 
@@ -891,158 +823,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 3. IMDb VARIANTS FIRST
-        # ====================================================
-
-        imdb_suggestions = []
-        if allow_spelling_suggestions:
-            try:
-                imdb_suggestions = (
-                    await get_imdb_suggestions(
-                        base_movie_name,
-                        limit=8
-                    )
-                )
-            except Exception as e:
-                print(
-                    f"⚠️ IMDb suggestion error: {e}",
-                    flush=True
-                )
-                imdb_suggestions = []
-
-
-        # Remove duplicate titles
-        unique_suggestions = []
-
-        seen_titles = set()
-
-        for title in imdb_suggestions or []:
-
-            if not title:
-                continue
-
-            title = str(title).strip()
-
-            normalized = re.sub(
-                r"[^a-z0-9]+",
-                " ",
-                title.lower()
-            ).strip()
-
-            if normalized in seen_titles:
-                continue
-
-            seen_titles.add(normalized)
-            unique_suggestions.append(title)
-
-
-        imdb_suggestions = unique_suggestions[:8]
-
-
-        # ====================================================
-        # 4. SHOW IMDb VARIANTS
-        # ====================================================
-      
-        if imdb_suggestions:
-
-            normalized_query = re.sub(
-                r"[^a-z0-9 ]",
-                "",
-                base_movie_name.lower()
-            ).strip()
-
-            normalized_titles = []
-
-            for title in imdb_suggestions:
-
-                cleaned_title = clean_imdb_title(
-                    title
-                )
-
-                normalized_titles.append(
-                    re.sub(
-                        r"[^a-z0-9 ]",
-                        "",
-                        cleaned_title.lower()
-                    ).strip()
-                )
-
-            similarity = max(
-                (
-                    difflib.SequenceMatcher(
-                        None,
-                        normalized_query,
-                        title
-                    ).ratio()
-                    for title in normalized_titles
-                ),
-                default=0.0
-            )
-
-            is_spelling_candidate = (
-                bool(normalized_query)
-                and similarity >= 0.72
-                and normalized_query
-                not in normalized_titles
-            )
-
-
-            suggestion_buttons = (
-                build_imdb_selection_buttons(
-                    user_id,
-                    imdb_suggestions
-                )
-            )
-
-
-            # ----------------------------------------------
-            # Spelling mistake
-            # ----------------------------------------------
-
-            if is_spelling_candidate:
-
-                prompt_text = (
-                    f"`{movie_name}`\n\n"
-                    "**Spelling Mistake Bro ‼️**\n\n"
-                    "**DON'T WORRY 😊 "
-                    "CHOOSE THE CORRECT ONE BELOW 👇**"
-                )
-
-            # ----------------------------------------------
-            # Normal multiple IMDb results
-            # ----------------------------------------------
-
-            else:
-
-                prompt_text = (
-                    f"🎬 **Multiple movies found for:** "
-                    f"`{movie_name}`\n\n"
-                    "👇🏻 **Choose The Movie below 👇🏻**"
-                )
-
-
-            prompt_msg = await client.send_message(
-                chat_id=chat_id,
-                text=prompt_text,
-                reply_markup=InlineKeyboardMarkup(
-                    suggestion_buttons
-                ),
-                reply_to_message_id=reply_to_message_id
-            )
-
-            if prompt_msg:
-                asyncio.create_task(
-                    auto_delete_message(
-                        prompt_msg,
-                        delay_seconds=45
-                    )
-                )
-
-            return
-
-
-        # ====================================================
-        # 5. DATABASE SEARCH
+        # 3. DATABASE SEARCH (DIRECT SEARCH)
         # ====================================================
 
         if allow_spelling_suggestions is False:
@@ -1076,8 +857,9 @@ async def execute_search(
                         limit=500
                     )
 
+
         # ====================================================
-        # 6. STRICT YEAR FILTER FOR NORMAL SEARCHES
+        # 4. STRICT YEAR FILTER FOR NORMAL SEARCHES
         # ====================================================
 
         if (
@@ -1106,7 +888,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 7. SEARCH LOG
+        # 5. SEARCH LOG
         # ====================================================
 
         asyncio.create_task(
@@ -1120,7 +902,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 8. NO DATABASE RESULTS
+        # 6. NO DATABASE RESULTS (SPELL CHECK & GOOGLE FALLBACK)
         # ====================================================
 
         if not results:
@@ -1270,7 +1052,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 9. SEARCH METRICS & AUDIO DETAILS
+        # 7. SEARCH METRICS & AUDIO DETAILS
         # ====================================================
 
         elapsed_sec = (
@@ -1330,7 +1112,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 10. FINAL RESULT CAPTION
+        # 8. FINAL RESULT CAPTION
         # ====================================================
 
         caption_lines = []
@@ -1366,7 +1148,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 11. SEARCH ID & CACHE
+        # 9. SEARCH ID & CACHE
         # ====================================================
 
         search_id = str(
@@ -1410,7 +1192,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 12. BUILD FILE BUTTONS
+        # 10. BUILD FILE BUTTONS
         # ====================================================
 
         buttons = []
@@ -1429,7 +1211,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 13. LANGUAGE BUTTONS
+        # 11. LANGUAGE BUTTONS
         # ====================================================
 
         buttons.extend(
@@ -1442,7 +1224,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 14. SEND ALL
+        # 12. SEND ALL
         # ====================================================
 
         buttons.append(
@@ -1461,7 +1243,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 15. PAGINATION
+        # 13. PAGINATION
         # ====================================================
 
         buttons.extend(
@@ -1480,7 +1262,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 16. SEND MESSAGE (TEXT ONLY)
+        # 14. SEND MESSAGE (TEXT ONLY)
         # ====================================================
 
         sent_message = await client.send_message(
@@ -1492,7 +1274,7 @@ async def execute_search(
 
 
         # ====================================================
-        # 17. AUTO DELETE RESULT MENU
+        # 15. AUTO DELETE RESULT MENU
         # ====================================================
 
         if sent_message:
