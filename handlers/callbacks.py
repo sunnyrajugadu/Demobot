@@ -646,7 +646,9 @@ async def check_expiry(query):
             "file",
             "lang",
             "page",
-            "all"
+            "all",
+            "open_lang",
+            "back_files"
         ):
 
             timestamp = int(
@@ -738,7 +740,7 @@ def file_button(
 
 
 # ============================================================
-# LANGUAGE BUTTONS
+# LANGUAGE BUTTON (MAIN VIEW)
 # ============================================================
 
 def language_buttons(
@@ -746,54 +748,72 @@ def language_buttons(
     timestamp,
     selected=None
 ):
+    """
+    Returns a single button for the main view.
+    When clicked, it opens the expanded language menu.
+    """
+    current_lang = selected if selected else "All"
+    
+    return [
+        [
+            InlineKeyboardButton(
+                text=f"Language ({current_lang})",
+                callback_data=f"open_lang:{search_id}:{timestamp}"
+            )
+        ]
+    ]
 
+
+# ============================================================
+# EXPANDED LANGUAGE MENU
+# ============================================================
+
+def expanded_language_menu(search_id, timestamp):
+    """
+    Generates the vertically stacked language selection menu.
+    """
     buttons = []
 
-    row = []
+    # Header
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                "⇊ SELECT LANGUAGE ⇊",
+                callback_data="none"
+            )
+        ]
+    )
 
-    fixed_order = [
+    langs = [
         "All",
         "English",
         "Hindi",
-        "Tamil",
         "Telugu",
+        "Tamil",
         "Malayalam",
         "Kannada"
     ]
 
-    for lang in fixed_order:
-
-        text = (
-            f"✅ {lang}"
-            if selected == lang
-            else lang
-        )
-
-        row.append(
-            InlineKeyboardButton(
-                text,
-                callback_data=(
-                    f"lang:"
-                    f"{lang}:"
-                    f"{search_id}:"
-                    f"{timestamp}"
-                )
-            )
-        )
-
-        if len(row) == 3:
-
-            buttons.append(
-                row
-            )
-
-            row = []
-
-    if row:
-
+    # Vertical List
+    for lang in langs:
         buttons.append(
-            row
+            [
+                InlineKeyboardButton(
+                    lang,
+                    callback_data=f"lang:{lang}:{search_id}:{timestamp}"
+                )
+            ]
         )
+
+    # Footer
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                "↪ BACK TO FILES ↩",
+                callback_data=f"back_files:{search_id}:{timestamp}"
+            )
+        ]
+    )
 
     return buttons
 
@@ -1467,7 +1487,144 @@ async def send_file(
 
 
 # ============================================================
-# LANGUAGE FILTER
+# OPEN EXPANDED LANGUAGE MENU
+# ============================================================
+
+@app.on_callback_query(
+    filters.regex(r"^open_lang:")
+)
+async def open_language_menu_callback(
+    client,
+    query: CallbackQuery
+):
+    try:
+        if await check_expiry(query):
+            return
+
+        parts = query.data.split(":")
+        
+        if len(parts) != 3:
+            return await query.answer("❌ Invalid language request", show_alert=True)
+            
+        _, search_id, timestamp = parts
+
+        buttons = expanded_language_menu(search_id, timestamp)
+
+        await query.message.edit_reply_markup(
+            InlineKeyboardMarkup(buttons)
+        )
+
+        await query.answer()
+
+    except Exception as e:
+        print(f"❌ OPEN LANG ERROR: {e}", flush=True)
+        try:
+            await query.answer("❌ Error opening language menu", show_alert=True)
+        except Exception:
+            pass
+
+
+# ============================================================
+# BACK TO FILES FROM LANGUAGE MENU
+# ============================================================
+
+@app.on_callback_query(
+    filters.regex(r"^back_files:")
+)
+async def back_to_files_callback(
+    client,
+    query: CallbackQuery
+):
+    try:
+        if await check_expiry(query):
+            return
+
+        parts = query.data.split(":")
+        
+        if len(parts) != 3:
+            return await query.answer("❌ Invalid request", show_alert=True)
+            
+        _, search_id, timestamp = parts
+
+        cache = await db_models.get_search_cache(search_id)
+
+        if not cache:
+            return await query.answer("❌ Search expired", show_alert=True)
+
+        page = cache.get("current_page") or cache.get("page") or 1
+        language = cache.get("selected_language", "All")
+        original_files = cache.get("files", [])
+
+        files = filter_language_files(original_files, language)
+
+        start = (page - 1) * FILES_PER_PAGE
+        end = start + FILES_PER_PAGE
+        results = files[start:end]
+
+        if not results and files:
+            results = files[:FILES_PER_PAGE]
+            page = 1
+
+        buttons = []
+
+        for file in results:
+            buttons.append(
+                [
+                    file_button(
+                        file,
+                        query.from_user.id,
+                        timestamp
+                    )
+                ]
+            )
+
+        buttons.extend(
+            language_buttons(
+                search_id,
+                timestamp,
+                language
+            )
+        )
+
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "📤 Send All",
+                    callback_data=(
+                        f"all:"
+                        f"{query.from_user.id}:"
+                        f"{search_id}:"
+                        f"{timestamp}"
+                    )
+                )
+            ]
+        )
+
+        buttons.extend(
+            pagination_buttons(
+                search_id,
+                page,
+                len(files),
+                timestamp
+            )
+        )
+
+        await query.message.edit_reply_markup(
+            InlineKeyboardMarkup(buttons)
+        )
+
+        await query.answer("🔙 Back to files")
+
+    except Exception as e:
+        print(f"❌ BACK TO FILES ERROR: {e}", flush=True)
+        try:
+            await query.answer("❌ Error returning to files", show_alert=True)
+        except Exception:
+            pass
+
+
+# ============================================================
+# LANGUAGE FILTER (PROCESS SELECTION)
 # ============================================================
 
 @app.on_callback_query(
@@ -1581,7 +1738,7 @@ async def language_filter(
             )
 
         # ====================================================
-        # LANGUAGE BUTTONS
+        # LANGUAGE BUTTONS (SINGLE BUTTON FOR MAIN MENU)
         # ====================================================
 
         buttons.extend(
@@ -2316,7 +2473,7 @@ async def send_all_files(
 
 
 # ============================================================
-# BACK SEARCH
+# BACK SEARCH (HELPER)
 # ============================================================
 
 async def back_search(
@@ -2433,7 +2590,7 @@ async def back_search(
         )
 
         await query.answer(
-            "↩️️ All languages selected"
+            "↩ All languages selected"
         )
 
     except Exception as e:
@@ -2695,5 +2852,3 @@ async def spelling_suggestion_callback(
         except Exception:
 
             pass
-
-
