@@ -488,37 +488,20 @@ def language_buttons(
     timestamp,
     selected=None
 ):
-    buttons = []
-    row = []
-
-    for lang in FIXED_LANGUAGES:
-
-        text = (
-            f"✅ {lang}"
-            if selected == lang
-            else lang
-        )
-
-        row.append(
+    current_lang = selected if selected else "All"
+    return [
+        [
             InlineKeyboardButton(
-                text,
+                text=f"Language",
                 callback_data=(
-                    f"lang:"
-                    f"{lang}:"
+                    f"open_lang:"
                     f"{search_id}:"
                     f"{timestamp}"
                 )
             )
-        )
+        ]
+    ]
 
-        if len(row) == 3:
-            buttons.append(row)
-            row = []
-
-    if row:
-        buttons.append(row)
-
-    return buttons
 
 
 # ================= DIRECT FILE BUTTON =================
