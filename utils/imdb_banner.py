@@ -330,7 +330,6 @@ def _draw_telegram_badge(canvas, xy, username, font):
     pill_w = padding_left + icon_size + spacing + tw + padding_right
     box_rect = (x, y, x + pill_w, y + pill_h)
 
-    # Frosted blur effect on canvas background under the badge
     crop_x1 = max(0, x - 12)
     crop_y1 = max(0, y - 12)
     crop_x2 = min(canvas.width, x + pill_w + 12)
@@ -665,16 +664,18 @@ async def create_imdb_banner(info, bot_username=None):
     )
 
     # --------------------------------------------------------
-    # Export Lossless Master Quality (RGBA to RGB Fast Convert)
+    # Export Lossless Master Quality
     # --------------------------------------------------------
     output = io.BytesIO()
     final_render = canvas.convert("RGB")
     final_render.save(
         output,
-        format="PNG",
-        optimize=False,
+        format="JPEG",
+        quality=98,
+        subsampling=0,
+        optimize=True,
     )
     output.seek(0)
-    output.name = "imdb_banner.png"
+    output.name = "imdb_banner.jpg"
 
     return output
