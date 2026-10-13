@@ -1,6 +1,7 @@
 import asyncio
 import time
 from pyrogram import filters
+from pyrogram.errors import FloodWait, ChannelInvalid, ChannelPrivate, ChatAdminRequired
 from pyrogram.types import Message
 
 from bot import app, user_app_1
@@ -42,17 +43,131 @@ async def manual_reindex_handler(client, message: Message):
     global is_reindexing
 
     if is_reindexing:
-        return
+        return await message.reply_text("⚠️ <b>Reindex is already in progress. Please wait.</b>")
 
     is_reindexing = True
     status_msg = await message.reply_text("⚡ <b>Starting 2-Session Parallel Reindex...</b>")
 
     try:
         await reindex_channel(status_message=status_msg)
-    except Exception:
-        pass
+    except Exception as e:
+        await status_msg.edit_text(f"❌ <b>Reindex Failed:</b> <code>{e}</code>")
     finally:
         is_reindexing = False
+
+
+# ============================================================
+# EXTERNAL CHANNEL DUMP COMMAND (OWNER ONLY)
+# ============================================================
+
+is_dumping = False
+
+@app.on_message(filters.command("dump") & is_owner_filter)
+async def external_dump_handler(client, message: Message):
+    global is_dumping
+
+    if is_dumping:
+        return await message.reply_text("⚠️ <b>Another channel dump process is already running. Please wait until it completes.</b>")
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return await message.reply_text(
+            "💡 <b>Usage Guide :</b>\n"
+            "» <code>/dump &lt;channel_id_or_username&gt;</code>\n\n"
+            "» <i>Public Channel :</i> <code>/dump @ChannelUsername</code>\n"
+            "» <i>Private Channel :</i> <code>/dump -100xxxxxxxxxx</code>",
+            quote=True
+        )
+
+    target_raw = parts[1].strip()
+    try:
+        target_chat = int(target_raw)
+    except ValueError:
+        target_chat = target_raw
+
+    if not user_app_1:
+        return await message.reply_text("❌ <b>User Session client (user_app_1) is not configured in bot.py!</b>")
+
+    if not user_app_1.is_connected:
+        try:
+            await user_app_1.start()
+        except Exception as conn_err:
+            return await message.reply_text(f"❌ <b>Failed to start User Session:</b> <code>{conn_err}</code>")
+
+    status_msg = await message.reply_text(f"🔍 <b>Connecting to target channel:</b> <code>{target_raw}</code>...")
+
+    try:
+        target_entity = await user_app_1.get_chat(target_chat)
+        target_id = target_entity.id
+        target_title = target_entity.title or str(target_id)
+    except (ChannelInvalid, ChannelPrivate):
+        return await status_msg.edit_text("❌ <b>Cannot access target channel! Make sure your user account has joined this channel.</b>")
+    except Exception as err:
+        return await status_msg.edit_text(f"❌ <b>Error accessing target channel:</b> <code>{err}</code>")
+
+    is_dumping = True
+    total_scanned = 0
+    total_copied = 0
+    skipped_count = 0
+    start_time = time.time()
+
+    await status_msg.edit_text(
+        f"🚀 <b>Starting full dump from :</b> <code>{target_title}</code>\n"
+        f"<i>Scanning all files from the channel history...</i>"
+    )
+
+    try:
+        async for msg in user_app_1.get_chat_history(target_id):
+            total_scanned += 1
+
+            if not (msg.video or msg.document):
+                continue
+
+            copied_successfully = False
+            while not copied_successfully:
+                try:
+                    await msg.copy(chat_id=STORAGE_CHANNEL_ID)
+                    total_copied += 1
+                    copied_successfully = True
+                    await asyncio.sleep(1.2)  # Safe delay to prevent Telegram flood limits
+                except FloodWait as flood:
+                    await status_msg.edit_text(f"⏳ <b>Telegram rate limit reached. Sleeping for {flood.value} seconds...</b>")
+                    await asyncio.sleep(flood.value + 1)
+                except Exception as copy_err:
+                    print(f"⚠️ Failed to copy message ID {msg.id}: {copy_err}", flush=True)
+                    skipped_count += 1
+                    break
+
+            # Update status message every 15 copied items
+            if total_copied > 0 and total_copied % 15 == 0:
+                elapsed = int(time.time() - start_time)
+                try:
+                    await status_msg.edit_text(
+                        f"⚡ <b>Dumping In Progress...</b>\n\n"
+                        f"📂 <b>Target Channel :</b> <code>{target_title}</code>\n"
+                        f"🔍 <b>Total Messages Scanned :</b> <code>{total_scanned}</code>\n"
+                        f"✅ <b>Files Copied & Indexed :</b> <code>{total_copied}</code>\n"
+                        f"⚠️ <b>Skipped / Failed :</b> <code>{skipped_count}</code>\n"
+                        f"⏱ <b>Elapsed Time :</b> <code>{elapsed}s</code>"
+                    )
+                except Exception:
+                    pass
+
+        elapsed_total = int(time.time() - start_time)
+        await status_msg.edit_text(
+            f"🎉 <b>Channel Dump Successfully Completed!</b>\n\n"
+            f"📂 <b>Target Channel :</b> <code>{target_title}</code>\n"
+            f"🔍 <b>Total Messages Scanned :</b> <code>{total_scanned}</code>\n"
+            f"✅ <b>Successfully Copied & Saved :</b> <code>{total_copied}</code>\n"
+            f"⚠️ <b>Skipped / Failed :</b> <code>{skipped_count}</code>\n"
+            f"⏱ <b>Total Time Taken :</b> <code>{elapsed_total}s</code>"
+        )
+
+    except Exception as dump_exc:
+        print(f"⚠️ Dump Execution Error: {dump_exc}", flush=True)
+        await status_msg.edit_text(f"❌ <b>Dump process halted due to error:</b> <code>{dump_exc}</code>")
+    finally:
+        is_dumping = False
 
 
 # ============================================================
