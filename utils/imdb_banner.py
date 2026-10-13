@@ -5,7 +5,7 @@ import aiohttp
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 # ============================================================
-# IMDb Custom Banner Generator
+# IMDb Custom Banner Generator (Original Ultra-HD Quality & High-Speed)
 # File: utils/imdb_banner.py
 # ============================================================
 
@@ -13,11 +13,10 @@ TMDB_API_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/"
 TMDB_KEY = "7f43669a428c09611a0518fa9c0bbddb"
 
-# Timeout optimized for downloading original ultra-HD images without failing
 HTTP_TIMEOUT = aiohttp.ClientTimeout(
-    total=12,
+    total=15,
     connect=4,
-    sock_read=8,
+    sock_read=10,
 )
 
 IMDB_USER_AGENT = (
@@ -66,11 +65,9 @@ def format_runtime_short(runtime_str):
     
     clean = str(runtime_str).upper()
     
-    # Already 1H 56M unte
     if re.search(r"\d+H\s*\d*M*", clean):
         return re.sub(r"\s+", " ", clean).strip()
     
-    # 1 hrs 56 mins format parsing
     hours_match = re.search(r"(\d+)\s*(?:HRS?|HOURS?|H)", clean)
     mins_match = re.search(r"(\d+)\s*(?:MINS?|MINUTES?|M)", clean)
     
@@ -127,7 +124,7 @@ def _font(size, bold=False):
 def _get_poster_color_palette(image, count=4):
     """Poster nunchi multi-color distinct shades palette ni auto-detect chesthundi."""
     default_palette = [
-        (205, 155, 115),  # Light Tan (Runtime) -> Black text
+        (205, 155, 115),  # Light Tan (Runtime) -> Dark text
         (168, 105, 68),   # Warm Terracotta (Genre 1) -> White text
         (185, 128, 86),   # Medium Sand (Genre 2) -> White text
         (130, 95, 78),    # Deep Slate/Brown (Year) -> White text
@@ -135,13 +132,13 @@ def _get_poster_color_palette(image, count=4):
     if not image:
         return default_palette
     try:
-        small = image.convert("RGB").resize((120, 120))
-        palette = small.quantize(colors=24)
+        small = image.convert("RGB").resize((90, 90), Image.Resampling.BILINEAR)
+        palette = small.quantize(colors=20)
         color_counts = palette.getcolors()
         if not color_counts:
             return default_palette
 
-        palette_colors = palette.getpalette()[:72]  # 24 * 3
+        palette_colors = palette.getpalette()[:60]  # 20 * 3
         extracted = []
 
         for freq, idx in sorted(color_counts, key=lambda x: x[0], reverse=True):
@@ -299,7 +296,6 @@ def _draw_pill(
     r, g, b = fill[:3]
     luminance = 0.299 * r + 0.587 * g + 0.114 * b
 
-    # Light color ayithe Dark/Black text, Dark color ayithe Crisp White text
     if luminance > 165:
         text_fill = (22, 22, 22, 240)
         shadow_fill = (255, 255, 255, 70)
@@ -336,13 +332,13 @@ def _draw_telegram_badge(canvas, xy, username, font):
     box_rect = (x, y, x + pill_w, y + pill_h)
 
     # 1. Frosted blur effect on canvas background under the badge
-    crop_x1 = max(0, x - 15)
-    crop_y1 = max(0, y - 15)
-    crop_x2 = min(canvas.width, x + pill_w + 15)
-    crop_y2 = min(canvas.height, y + pill_h + 15)
+    crop_x1 = max(0, x - 12)
+    crop_y1 = max(0, y - 12)
+    crop_x2 = min(canvas.width, x + pill_w + 12)
+    crop_y2 = min(canvas.height, y + pill_h + 12)
 
     cropped = canvas.crop((crop_x1, crop_y1, crop_x2, crop_y2))
-    blurred = cropped.filter(ImageFilter.GaussianBlur(14))
+    blurred = cropped.filter(ImageFilter.BoxBlur(8))
 
     # Mask for rounded pill
     mask = Image.new("L", (pill_w, pill_h), 0)
@@ -354,7 +350,7 @@ def _draw_telegram_badge(canvas, xy, username, font):
     patch = blurred.crop((offset_x, offset_y, offset_x + pill_w, offset_y + pill_h))
     canvas.paste(patch, (x, y), mask)
 
-    # 2. Transparent glass overlay with smooth white border
+    # 2. Transparent glass overlay with smooth glossy border
     glass_overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     gd = ImageDraw.Draw(glass_overlay, "RGBA")
     gd.rounded_rectangle(
@@ -396,7 +392,7 @@ def _draw_telegram_badge(canvas, xy, username, font):
 
 
 # ============================================================
-# TMDB lookup
+# TMDB lookup (Original Ultra-HD URLs)
 # ============================================================
 
 async def fetch_tmdb_backdrop_and_poster(imdb_id, title=None, year=None):
@@ -447,6 +443,7 @@ async def fetch_tmdb_backdrop_and_poster(imdb_id, title=None, year=None):
             backdrop_path = selected.get("backdrop_path")
             poster_path = selected.get("poster_path")
 
+            # FETCHING ORIGINAL ULTRA-HD QUALITY IMAGES
             backdrop_url = f"{TMDB_IMAGE_BASE}original{backdrop_path}" if backdrop_path else None
             poster_url = f"{TMDB_IMAGE_BASE}original{poster_path}" if poster_path else None
 
@@ -495,7 +492,7 @@ async def create_imdb_banner(info, bot_username=None):
     username = info.get("username") or info.get("bot_username") or bot_username or "@CinemaVeta"
 
     # --------------------------------------------------------
-    # Fetch Images
+    # Fetch Original Ultra-HD Images
     # --------------------------------------------------------
     backdrop_url, tmdb_poster_url = await fetch_tmdb_backdrop_and_poster(imdb_id, title, year)
 
@@ -505,7 +502,7 @@ async def create_imdb_banner(info, bot_username=None):
     if poster is None:
         poster = await _download_image(info.get("poster"))
 
-    # Multi-color extraction from poster
+    # Multi-color extraction directly from poster
     colors = _get_poster_color_palette(poster, count=4)
     dynamic_highlight = colors[1] if len(colors) > 1 else colors[0]
 
@@ -517,14 +514,14 @@ async def create_imdb_banner(info, bot_username=None):
 
     background = _cover_image(background, (BANNER_WIDTH, BANNER_HEIGHT))
     
-    # 2nd Image Natural Darkness (72% brightness instead of pitch dark 48%)
+    # 2nd Image Natural Darkness (72% brightness instead of pitch dark)
     background = ImageEnhance.Brightness(background).enhance(0.72)
-    background = background.filter(ImageFilter.GaussianBlur(radius=1.2))
+    background = background.filter(ImageFilter.BoxBlur(1))
 
     canvas = background.convert("RGBA")
 
     # --------------------------------------------------------
-    # Balanced Dark overlay (2nd Image level contrast)
+    # Fast Balanced Dark overlay (2nd Image level contrast)
     # --------------------------------------------------------
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay, "RGBA")
@@ -533,15 +530,12 @@ async def create_imdb_banner(info, bot_username=None):
     text_right = 1060
     fade_end = text_right + 80
 
-    for x in range(BANNER_WIDTH):
-        if x < fade_end:
-            ratio = x / fade_end
-            alpha = int(210 * ((1 - ratio) ** 1.15))
-        else:
-            alpha = 0
-        od.line((x, 0, x, BANNER_HEIGHT), fill=(0, 0, 0, alpha))
+    for x in range(0, fade_end, 2):
+        ratio = x / fade_end
+        alpha = int(210 * ((1 - ratio) ** 1.15))
+        od.line((x, 0, x, BANNER_HEIGHT), fill=(0, 0, 0, alpha), width=2)
 
-    # Balanced overall tint
+    # Balanced overall soft tint
     od.rectangle((0, 0, BANNER_WIDTH, BANNER_HEIGHT), fill=(0, 0, 0, 45))
 
     canvas = Image.alpha_composite(canvas, overlay)
@@ -659,7 +653,7 @@ async def create_imdb_banner(info, bot_username=None):
         radius=22,
         fill=(0, 0, 0, 160),
     )
-    shadow = shadow.filter(ImageFilter.GaussianBlur(12))
+    shadow = shadow.filter(ImageFilter.BoxBlur(8))
     canvas = Image.alpha_composite(canvas, shadow)
 
     if poster is not None:
@@ -683,14 +677,14 @@ async def create_imdb_banner(info, bot_username=None):
     )
 
     # --------------------------------------------------------
-    # Export High-Quality JPEG
+    # Export Ultra-High-Quality JPEG (Sharp text & No blur artifacts)
     # --------------------------------------------------------
     output = io.BytesIO()
     canvas.convert("RGB").save(
         output,
         format="JPEG",
-        quality=95,          
-        subsampling=0,       
+        quality=96,
+        subsampling=0,
         optimize=True,
     )
     output.seek(0)
