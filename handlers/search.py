@@ -1328,7 +1328,8 @@ async def execute_search(
         "owner",
         "delete",
         "generate_link",
-        "imdb"
+        "imdb",
+        "dump"
     ])
 )
 async def search_movie_handler(
