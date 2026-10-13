@@ -93,39 +93,62 @@ def _font(size, bold=False):
 
 
 # ============================================================
-# Image helpers & Poster Color Extraction
+# Image helpers & Poster Multi-Color Extraction
 # ============================================================
 
-def _get_dominant_color_from_poster(image, default=(175, 126, 94)):
-    """Right side poster nunchi vibrant accent color ni detect chesthundi"""
+def _get_poster_color_palette(image, count=4):
+    """Poster nunchi multi-color distinct shades palette ni auto-detect chesthundi."""
+    default_palette = [
+        (198, 142, 102),  # Light Tan (Runtime)
+        (168, 105, 68),   # Warm Terracotta (Genre 1)
+        (185, 128, 86),   # Medium Sand (Genre 2)
+        (130, 95, 78),    # Deep Slate/Brown (Year)
+    ]
     if not image:
-        return default
+        return default_palette
     try:
-        small = image.convert("RGB").resize((100, 100))
-        palette = small.quantize(colors=16)
+        small = image.convert("RGB").resize((120, 120))
+        palette = small.quantize(colors=24)
         color_counts = palette.getcolors()
         if not color_counts:
-            return default
+            return default_palette
 
-        palette_colors = palette.getpalette()[:48]
-        best_color = default
-        max_score = -1
+        palette_colors = palette.getpalette()[:72]  # 24 * 3
+        extracted = []
 
-        for count, idx in color_counts:
+        for freq, idx in sorted(color_counts, key=lambda x: x[0], reverse=True):
             r = palette_colors[idx * 3]
             g = palette_colors[idx * 3 + 1]
             b = palette_colors[idx * 3 + 2]
 
-            brightness = 0.299 * r + 0.587 * g + 0.114 * b
-            if 35 < brightness < 225:
-                saturation = max(r, g, b) - min(r, g, b)
-                score = saturation * 1.5 + (count / 100.0)
-                if score > max_score:
-                    max_score = score
-                    best_color = (r, g, b)
-        return best_color
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            sat = max(r, g, b) - min(r, g, b)
+
+            if 45 < lum < 215 and sat > 18:
+                is_unique = True
+                for (er, eg, eb) in extracted:
+                    dist = abs(r - er) + abs(g - eg) + abs(b - eb)
+                    if dist < 42:
+                        is_unique = False
+                        break
+                if is_unique:
+                    extracted.append((r, g, b))
+                if len(extracted) >= count:
+                    break
+
+        if extracted:
+            base_r, base_g, base_b = extracted[0]
+            while len(extracted) < count:
+                factor = 0.85 ** len(extracted)
+                extracted.append((
+                    max(50, int(base_r * factor)),
+                    max(40, int(base_g * factor)),
+                    max(35, int(base_g * factor)),
+                ))
+            return extracted
     except Exception:
-        return default
+        pass
+    return default_palette
 
 
 def _cover_image(image, size):
@@ -274,7 +297,6 @@ def _draw_telegram_badge(canvas, xy, username, font):
     padding_right = 24
     pill_w = padding_left + icon_size + spacing + tw + padding_right
 
-    # Outer semi-transparent pill
     draw.rounded_rectangle(
         (x, y, x + pill_w, y + pill_h),
         radius=pill_h // 2,
@@ -283,7 +305,6 @@ def _draw_telegram_badge(canvas, xy, username, font):
         width=1,
     )
 
-    # Blue telegram circle
     icon_x = x + padding_left
     icon_y = y + (pill_h - icon_size) // 2
     draw.ellipse(
@@ -291,7 +312,6 @@ def _draw_telegram_badge(canvas, xy, username, font):
         fill=(42, 171, 238, 255),
     )
 
-    # Telegram plane vector
     cx = icon_x + icon_size / 2
     cy = icon_y + icon_size / 2
     points = [
@@ -303,7 +323,6 @@ def _draw_telegram_badge(canvas, xy, username, font):
     ]
     draw.polygon(points, fill=(255, 255, 255, 255))
 
-    # Bot username
     text_x = icon_x + icon_size + spacing
     text_y = y + (pill_h - th) // 2 - bbox[1] - 2
     draw.text((text_x, text_y), text, font=font, fill=(255, 255, 255, 255))
@@ -405,7 +424,6 @@ async def create_imdb_banner(info, bot_username=None):
     storyline = clean_text(info.get("storyline"), "No storyline available.")
     genres = unique_strings(info.get("genres") or [])
 
-    # Username handling (info nunchi aina leda argument dwara aina)
     username = info.get("username") or info.get("bot_username") or bot_username or "@CinemaVeta"
 
     # --------------------------------------------------------
@@ -413,19 +431,16 @@ async def create_imdb_banner(info, bot_username=None):
     # --------------------------------------------------------
     backdrop_url, tmdb_poster_url = await fetch_tmdb_backdrop_and_poster(imdb_id, title, year)
 
-    # 1. Poster download (Poster nunchi dominant color theesukodaniki mundhe load chesthunnam)
     poster = None
     if tmdb_poster_url:
         poster = await _download_image(tmdb_poster_url)
     if poster is None:
         poster = await _download_image(info.get("poster"))
 
-    # Poster nunchi dynamic color auto-detection (Brown, orange, maroon etc.)
-    dom_r, dom_g, dom_b = _get_dominant_color_from_poster(poster)
-    pill_fill = (dom_r, dom_g, dom_b, 240)
-    dynamic_highlight = (dom_r, dom_g, dom_b, 255)
+    # Multi-color extraction from poster
+    colors = _get_poster_color_palette(poster, count=4)
+    dynamic_highlight = colors[1] if len(colors) > 1 else colors[0]
 
-    # 2. Backdrop Image processing
     background = await _download_image(backdrop_url)
     if background is None:
         background = poster
@@ -433,15 +448,13 @@ async def create_imdb_banner(info, bot_username=None):
         background = Image.new("RGB", (BANNER_WIDTH, BANNER_HEIGHT), (25, 25, 25))
 
     background = _cover_image(background, (BANNER_WIDTH, BANNER_HEIGHT))
-    
-    # Backdrop inka dark cheyadaniki (35% brightness reduction)
     background = ImageEnhance.Brightness(background).enhance(0.48)
     background = background.filter(ImageFilter.GaussianBlur(radius=1.5))
 
     canvas = background.convert("RGBA")
 
     # --------------------------------------------------------
-    # Dark shadow overlay (Left text contrast kosam)
+    # Dark shadow overlay
     # --------------------------------------------------------
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay, "RGBA")
@@ -458,7 +471,6 @@ async def create_imdb_banner(info, bot_username=None):
             alpha = 0
         od.line((x, 0, x, BANNER_HEIGHT), fill=(0, 0, 0, alpha))
 
-    # Extra black layer
     od.rectangle((0, 0, BANNER_WIDTH, BANNER_HEIGHT), fill=(0, 0, 0, 85))
 
     canvas = Image.alpha_composite(canvas, overlay)
@@ -477,7 +489,7 @@ async def create_imdb_banner(info, bot_username=None):
     max_text_width = text_right - left_x
 
     # --------------------------------------------------------
-    # Title & Rating Placement (2nd Image style)
+    # Title & Rating Placement
     # --------------------------------------------------------
     title_lines = _wrap_text(draw, title.upper(), title_font, max_text_width - 230, max_lines=2)
     
@@ -488,18 +500,15 @@ async def create_imdb_banner(info, bot_username=None):
         draw.text((left_x + 3, current_y + 3), line, font=title_font, fill=(0, 0, 0, 230))
         draw.text((left_x, current_y), line, font=title_font, fill=(255, 255, 255, 255))
         
-        # Rating & Underline on last title line
         if idx == len(title_lines) - 1:
             bbox = draw.textbbox((0, 0), line, font=title_font)
             last_line_width = bbox[2] - bbox[0]
             
             rating_x = left_x + min(last_line_width + 24, max_text_width - 190)
             
-            # Rating star + score
             draw.text((rating_x, current_y + 15), "★", font=_font(30, True), fill=(255, 193, 61, 255))
             draw.text((rating_x + 33, current_y + 16), rating, font=rating_font, fill=(255, 255, 255, 255))
 
-            # IMDb Badge (Filled Yellow box, black text)
             imdb_box_x = rating_x + 98
             draw.rounded_rectangle(
                 (imdb_box_x, current_y + 16, imdb_box_x + 68, current_y + 48),
@@ -507,7 +516,6 @@ async def create_imdb_banner(info, bot_username=None):
             )
             draw.text((imdb_box_x + 10, current_y + 20), "IMDb", font=small_font, fill=(0, 0, 0, 255))
 
-            # Underline bar matching poster color
             underline_w = min(150, max(110, last_line_width))
             draw.rounded_rectangle(
                 (left_x, current_y + 76, left_x + underline_w, current_y + 81),
@@ -530,7 +538,7 @@ async def create_imdb_banner(info, bot_username=None):
         )
 
     # --------------------------------------------------------
-    # Metadata Badges (Poster auto-color: Runtime, Genres, Year)
+    # Metadata Badges (Multi-Color Dynamic Pills)
     # --------------------------------------------------------
     pill_y = story_y + (len(story_lines_wrapped) * 41) + 26
     pill_x = left_x
@@ -543,7 +551,10 @@ async def create_imdb_banner(info, bot_username=None):
     if year and year != "N/A":
         pill_items.append(str(year))
 
-    for item in pill_items:
+    for idx, item in enumerate(pill_items):
+        cur_color = colors[idx % len(colors)]
+        pill_fill = (cur_color[0], cur_color[1], cur_color[2], 240)
+
         rect = _draw_pill(
             canvas,
             (pill_x, pill_y),
