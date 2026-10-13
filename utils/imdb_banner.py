@@ -292,7 +292,6 @@ def _draw_pill(
     text_x = x + padding_x
     text_y = y + padding_y - bbox[1]
 
-    # Luminance calculation (Perceived Brightness)
     r, g, b = fill[:3]
     luminance = 0.299 * r + 0.587 * g + 0.114 * b
 
@@ -311,7 +310,7 @@ def _draw_pill(
 
 
 def _draw_telegram_badge(canvas, xy, username, font):
-    """2nd image lo unnatlu Frosted Glass (Transparent + Blurred) Telegram pill"""
+    """Frosted Glass (Transparent + Blurred) Telegram pill"""
     x, y = xy
     
     text = str(username).strip()
@@ -331,7 +330,7 @@ def _draw_telegram_badge(canvas, xy, username, font):
     pill_w = padding_left + icon_size + spacing + tw + padding_right
     box_rect = (x, y, x + pill_w, y + pill_h)
 
-    # 1. Frosted blur effect on canvas background under the badge
+    # Frosted blur effect on canvas background under the badge
     crop_x1 = max(0, x - 12)
     crop_y1 = max(0, y - 12)
     crop_x2 = min(canvas.width, x + pill_w + 12)
@@ -340,31 +339,27 @@ def _draw_telegram_badge(canvas, xy, username, font):
     cropped = canvas.crop((crop_x1, crop_y1, crop_x2, crop_y2))
     blurred = cropped.filter(ImageFilter.BoxBlur(8))
 
-    # Mask for rounded pill
     mask = Image.new("L", (pill_w, pill_h), 0)
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, pill_w, pill_h), radius=pill_h // 2, fill=255)
 
-    # Paste blurred background inside pill
     offset_x = x - crop_x1
     offset_y = y - crop_y1
     patch = blurred.crop((offset_x, offset_y, offset_x + pill_w, offset_y + pill_h))
     canvas.paste(patch, (x, y), mask)
 
-    # 2. Transparent glass overlay with smooth glossy border
     glass_overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     gd = ImageDraw.Draw(glass_overlay, "RGBA")
     gd.rounded_rectangle(
         box_rect,
         radius=pill_h // 2,
-        fill=(255, 255, 255, 38),   # Semi-transparent glass tint
-        outline=(255, 255, 255, 75), # Soft glossy border
+        fill=(255, 255, 255, 38),
+        outline=(255, 255, 255, 75),
         width=1,
     )
     canvas.alpha_composite(glass_overlay)
 
     draw = ImageDraw.Draw(canvas, "RGBA")
 
-    # 3. Blue Telegram Circle Icon
     icon_x = x + padding_left
     icon_y = y + (pill_h - icon_size) // 2
     draw.ellipse(
@@ -372,7 +367,6 @@ def _draw_telegram_badge(canvas, xy, username, font):
         fill=(42, 171, 238, 255),
     )
 
-    # Telegram Paper Plane vector icon
     cx = icon_x + icon_size / 2
     cy = icon_y + icon_size / 2
     points = [
@@ -384,7 +378,6 @@ def _draw_telegram_badge(canvas, xy, username, font):
     ]
     draw.polygon(points, fill=(255, 255, 255, 255))
 
-    # 4. Username Text with subtle drop shadow
     text_x = icon_x + icon_size + spacing
     text_y = y + (pill_h - th) // 2 - bbox[1] - 2
     draw.text((text_x + 1, text_y + 1), text, font=font, fill=(0, 0, 0, 180))
@@ -392,7 +385,7 @@ def _draw_telegram_badge(canvas, xy, username, font):
 
 
 # ============================================================
-# TMDB lookup (Original Ultra-HD URLs)
+# TMDB lookup (Original Ultra-HD URLs with safe fallback)
 # ============================================================
 
 async def fetch_tmdb_backdrop_and_poster(imdb_id, title=None, year=None):
@@ -415,7 +408,7 @@ async def fetch_tmdb_backdrop_and_poster(imdb_id, title=None, year=None):
                     return None, None
                 found = await response.json(content_type=None)
 
-            results = found.get("movie_results") or found.get("tv_results") or []
+            results = (found.get("movie_results") or []) + (found.get("tv_results") or [])
             if not results:
                 return None, None
 
@@ -443,7 +436,6 @@ async def fetch_tmdb_backdrop_and_poster(imdb_id, title=None, year=None):
             backdrop_path = selected.get("backdrop_path")
             poster_path = selected.get("poster_path")
 
-            # FETCHING ORIGINAL ULTRA-HD QUALITY IMAGES
             backdrop_url = f"{TMDB_IMAGE_BASE}original{backdrop_path}" if backdrop_path else None
             poster_url = f"{TMDB_IMAGE_BASE}original{poster_path}" if poster_path else None
 
@@ -485,7 +477,7 @@ async def create_imdb_banner(info, bot_username=None):
     year = clean_text(info.get("year"), "N/A")
     rating = clean_text(info.get("rating"), "N/A")
     raw_runtime = clean_text(info.get("runtime"), "N/A")
-    runtime = format_runtime_short(raw_runtime)  # Converts to 1H 56M
+    runtime = format_runtime_short(raw_runtime)
     storyline = clean_text(info.get("storyline"), "No storyline available.")
     genres = unique_strings(info.get("genres") or [])
 
@@ -502,7 +494,6 @@ async def create_imdb_banner(info, bot_username=None):
     if poster is None:
         poster = await _download_image(info.get("poster"))
 
-    # Multi-color extraction directly from poster
     colors = _get_poster_color_palette(poster, count=4)
     dynamic_highlight = colors[1] if len(colors) > 1 else colors[0]
 
@@ -513,15 +504,13 @@ async def create_imdb_banner(info, bot_username=None):
         background = Image.new("RGB", (BANNER_WIDTH, BANNER_HEIGHT), (25, 25, 25))
 
     background = _cover_image(background, (BANNER_WIDTH, BANNER_HEIGHT))
-    
-    # 2nd Image Natural Darkness (72% brightness instead of pitch dark)
     background = ImageEnhance.Brightness(background).enhance(0.72)
     background = background.filter(ImageFilter.BoxBlur(1))
 
     canvas = background.convert("RGBA")
 
     # --------------------------------------------------------
-    # Fast Balanced Dark overlay (2nd Image level contrast)
+    # Fast Balanced Dark overlay
     # --------------------------------------------------------
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay, "RGBA")
@@ -535,7 +524,6 @@ async def create_imdb_banner(info, bot_username=None):
         alpha = int(210 * ((1 - ratio) ** 1.15))
         od.line((x, 0, x, BANNER_HEIGHT), fill=(0, 0, 0, alpha), width=2)
 
-    # Balanced overall soft tint
     od.rectangle((0, 0, BANNER_WIDTH, BANNER_HEIGHT), fill=(0, 0, 0, 45))
 
     canvas = Image.alpha_composite(canvas, overlay)
@@ -677,13 +665,14 @@ async def create_imdb_banner(info, bot_username=None):
     )
 
     # --------------------------------------------------------
-    # Export Lossless Master Quality (100% Pure Image Quality)
+    # Export Lossless Master Quality (RGBA to RGB Fast Convert)
     # --------------------------------------------------------
     output = io.BytesIO()
-    canvas.save(
+    final_render = canvas.convert("RGB")
+    final_render.save(
         output,
         format="PNG",
-        optimize=True,
+        optimize=False,
     )
     output.seek(0)
     output.name = "imdb_banner.png"
