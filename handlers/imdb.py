@@ -1361,6 +1361,7 @@ async def imdb_view_callback(client, query: CallbackQuery):
 
         me = await client.get_me()
         bot_user = me.username or "CinemaVetaBot"
+        info["username"] = f"@{bot_user}"
         bot_mention = (
             f'<a href="https://t.me/{html.escape(bot_user)}">'
             f'<b>@{html.escape(bot_user)}</b></a>'
