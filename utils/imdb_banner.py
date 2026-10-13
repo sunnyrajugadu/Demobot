@@ -59,6 +59,34 @@ def unique_strings(values):
     return result
 
 
+def format_runtime_short(runtime_str):
+    """Runtime ni '1 hrs 56 mins' nunchi 2nd image lo unna '1H 56M' format ki convert chesthundi"""
+    if not runtime_str or runtime_str == "N/A":
+        return "N/A"
+    
+    clean = str(runtime_str).upper()
+    
+    # Already 1H 56M unte
+    if re.search(r"\d+H\s*\d*M*", clean):
+        return re.sub(r"\s+", " ", clean).strip()
+    
+    # 1 hrs 56 mins format parsing
+    hours_match = re.search(r"(\d+)\s*(?:HRS?|HOURS?|H)", clean)
+    mins_match = re.search(r"(\d+)\s*(?:MINS?|MINUTES?|M)", clean)
+    
+    h = hours_match.group(1) if hours_match else None
+    m = mins_match.group(1) if mins_match else None
+    
+    if h and m:
+        return f"{h}H {m}M"
+    if h:
+        return f"{h}H"
+    if m:
+        return f"{m}M"
+        
+    return clean
+
+
 # ============================================================
 # Font handling
 # ============================================================
@@ -99,10 +127,10 @@ def _font(size, bold=False):
 def _get_poster_color_palette(image, count=4):
     """Poster nunchi multi-color distinct shades palette ni auto-detect chesthundi."""
     default_palette = [
-        (198, 142, 102),  # Light Tan (Runtime)
-        (168, 105, 68),   # Warm Terracotta (Genre 1)
-        (185, 128, 86),   # Medium Sand (Genre 2)
-        (130, 95, 78),    # Deep Slate/Brown (Year)
+        (205, 155, 115),  # Light Tan (Runtime) -> Black text
+        (168, 105, 68),   # Warm Terracotta (Genre 1) -> White text
+        (185, 128, 86),   # Medium Sand (Genre 2) -> White text
+        (130, 95, 78),    # Deep Slate/Brown (Year) -> White text
     ]
     if not image:
         return default_palette
@@ -124,11 +152,11 @@ def _get_poster_color_palette(image, count=4):
             lum = 0.299 * r + 0.587 * g + 0.114 * b
             sat = max(r, g, b) - min(r, g, b)
 
-            if 45 < lum < 215 and sat > 18:
+            if 50 < lum < 220 and sat > 15:
                 is_unique = True
                 for (er, eg, eb) in extracted:
                     dist = abs(r - er) + abs(g - eg) + abs(b - eb)
-                    if dist < 42:
+                    if dist < 38:
                         is_unique = False
                         break
                 if is_unique:
@@ -139,7 +167,7 @@ def _get_poster_color_palette(image, count=4):
         if extracted:
             base_r, base_g, base_b = extracted[0]
             while len(extracted) < count:
-                factor = 0.85 ** len(extracted)
+                factor = 0.82 ** len(extracted)
                 extracted.append((
                     max(50, int(base_r * factor)),
                     max(40, int(base_g * factor)),
@@ -241,13 +269,12 @@ def _draw_pill(
     xy,
     text,
     font,
-    fill=(175, 126, 94, 235),
-    outline=None,
-    text_fill=(255, 255, 255, 255),
+    fill=(175, 126, 94, 255),
     padding_x=20,
     padding_y=10,
     radius=22,
 ):
+    """Pill color luminance batti light colors ki Black text, dark colors ki White text auto select chesthundhi"""
     draw = ImageDraw.Draw(base, "RGBA")
     x, y = xy
     text = str(text or "")
@@ -263,48 +290,85 @@ def _draw_pill(
         y + th + padding_y * 2,
     )
 
-    if outline:
-        draw.rounded_rectangle(rect, radius=radius, fill=fill, outline=outline, width=1)
-    else:
-        draw.rounded_rectangle(rect, radius=radius, fill=fill)
+    draw.rounded_rectangle(rect, radius=radius, fill=fill)
 
     text_x = x + padding_x
     text_y = y + padding_y - bbox[1]
 
-    draw.text((text_x + 1, text_y + 1), text, font=font, fill=(0, 0, 0, 160))
+    # Luminance calculation (Perceived Brightness)
+    r, g, b = fill[:3]
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+
+    # Light color ayithe Dark/Black text, Dark color ayithe Crisp White text
+    if luminance > 165:
+        text_fill = (22, 22, 22, 240)
+        shadow_fill = (255, 255, 255, 70)
+        draw.text((text_x + 1, text_y + 1), text, font=font, fill=shadow_fill)
+    else:
+        text_fill = (255, 255, 255, 255)
+        shadow_fill = (0, 0, 0, 160)
+        draw.text((text_x + 1, text_y + 1), text, font=font, fill=shadow_fill)
+
     draw.text((text_x, text_y), text, font=font, fill=text_fill)
 
     return rect
 
 
 def _draw_telegram_badge(canvas, xy, username, font):
-    """2nd image lo unna Telegram logo pill design"""
+    """2nd image lo unnatlu Frosted Glass (Transparent + Blurred) Telegram pill"""
     x, y = xy
-    draw = ImageDraw.Draw(canvas, "RGBA")
     
     text = str(username).strip()
     if not text.startswith("@"):
         text = f"@{text}"
 
-    bbox = draw.textbbox((0, 0), text, font=font)
+    temp_draw = ImageDraw.Draw(canvas)
+    bbox = temp_draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
 
-    pill_h = 52
-    icon_size = 38
+    pill_h = 54
+    icon_size = 40
     padding_left = 10
     spacing = 14
-    padding_right = 24
+    padding_right = 26
     pill_w = padding_left + icon_size + spacing + tw + padding_right
+    box_rect = (x, y, x + pill_w, y + pill_h)
 
-    draw.rounded_rectangle(
-        (x, y, x + pill_w, y + pill_h),
+    # 1. Frosted blur effect on canvas background under the badge
+    crop_x1 = max(0, x - 15)
+    crop_y1 = max(0, y - 15)
+    crop_x2 = min(canvas.width, x + pill_w + 15)
+    crop_y2 = min(canvas.height, y + pill_h + 15)
+
+    cropped = canvas.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+    blurred = cropped.filter(ImageFilter.GaussianBlur(14))
+
+    # Mask for rounded pill
+    mask = Image.new("L", (pill_w, pill_h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, pill_w, pill_h), radius=pill_h // 2, fill=255)
+
+    # Paste blurred background inside pill
+    offset_x = x - crop_x1
+    offset_y = y - crop_y1
+    patch = blurred.crop((offset_x, offset_y, offset_x + pill_w, offset_y + pill_h))
+    canvas.paste(patch, (x, y), mask)
+
+    # 2. Transparent glass overlay with smooth white border
+    glass_overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glass_overlay, "RGBA")
+    gd.rounded_rectangle(
+        box_rect,
         radius=pill_h // 2,
-        fill=(30, 35, 45, 175),
-        outline=(255, 255, 255, 60),
+        fill=(255, 255, 255, 38),   # Semi-transparent glass tint
+        outline=(255, 255, 255, 75), # Soft glossy border
         width=1,
     )
+    canvas.alpha_composite(glass_overlay)
 
+    draw = ImageDraw.Draw(canvas, "RGBA")
+
+    # 3. Blue Telegram Circle Icon
     icon_x = x + padding_left
     icon_y = y + (pill_h - icon_size) // 2
     draw.ellipse(
@@ -312,6 +376,7 @@ def _draw_telegram_badge(canvas, xy, username, font):
         fill=(42, 171, 238, 255),
     )
 
+    # Telegram Paper Plane vector icon
     cx = icon_x + icon_size / 2
     cy = icon_y + icon_size / 2
     points = [
@@ -323,8 +388,10 @@ def _draw_telegram_badge(canvas, xy, username, font):
     ]
     draw.polygon(points, fill=(255, 255, 255, 255))
 
+    # 4. Username Text with subtle drop shadow
     text_x = icon_x + icon_size + spacing
     text_y = y + (pill_h - th) // 2 - bbox[1] - 2
+    draw.text((text_x + 1, text_y + 1), text, font=font, fill=(0, 0, 0, 180))
     draw.text((text_x, text_y), text, font=font, fill=(255, 255, 255, 255))
 
 
@@ -420,7 +487,8 @@ async def create_imdb_banner(info, bot_username=None):
     title = clean_text(info.get("title"), "Unknown Title")
     year = clean_text(info.get("year"), "N/A")
     rating = clean_text(info.get("rating"), "N/A")
-    runtime = clean_text(info.get("runtime"), "N/A")
+    raw_runtime = clean_text(info.get("runtime"), "N/A")
+    runtime = format_runtime_short(raw_runtime)  # Converts to 1H 56M
     storyline = clean_text(info.get("storyline"), "No storyline available.")
     genres = unique_strings(info.get("genres") or [])
 
@@ -448,13 +516,15 @@ async def create_imdb_banner(info, bot_username=None):
         background = Image.new("RGB", (BANNER_WIDTH, BANNER_HEIGHT), (25, 25, 25))
 
     background = _cover_image(background, (BANNER_WIDTH, BANNER_HEIGHT))
-    background = ImageEnhance.Brightness(background).enhance(0.48)
-    background = background.filter(ImageFilter.GaussianBlur(radius=1.5))
+    
+    # 2nd Image Natural Darkness (72% brightness instead of pitch dark 48%)
+    background = ImageEnhance.Brightness(background).enhance(0.72)
+    background = background.filter(ImageFilter.GaussianBlur(radius=1.2))
 
     canvas = background.convert("RGBA")
 
     # --------------------------------------------------------
-    # Dark shadow overlay
+    # Balanced Dark overlay (2nd Image level contrast)
     # --------------------------------------------------------
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay, "RGBA")
@@ -466,12 +536,13 @@ async def create_imdb_banner(info, bot_username=None):
     for x in range(BANNER_WIDTH):
         if x < fade_end:
             ratio = x / fade_end
-            alpha = int(245 * ((1 - ratio) ** 1.1))
+            alpha = int(210 * ((1 - ratio) ** 1.15))
         else:
             alpha = 0
         od.line((x, 0, x, BANNER_HEIGHT), fill=(0, 0, 0, alpha))
 
-    od.rectangle((0, 0, BANNER_WIDTH, BANNER_HEIGHT), fill=(0, 0, 0, 85))
+    # Balanced overall tint
+    od.rectangle((0, 0, BANNER_WIDTH, BANNER_HEIGHT), fill=(0, 0, 0, 45))
 
     canvas = Image.alpha_composite(canvas, overlay)
     draw = ImageDraw.Draw(canvas, "RGBA")
@@ -533,12 +604,12 @@ async def create_imdb_banner(info, bot_username=None):
     for index, line in enumerate(story_lines_wrapped):
         draw.text(
             (left_x + 1, story_y + index * 41),
-            line, font=body_bold, fill=(235, 235, 235, 255),
+            line, font=body_bold, fill=(240, 240, 240, 255),
             stroke_width=1, stroke_fill=(0, 0, 0, 160)
         )
 
     # --------------------------------------------------------
-    # Metadata Badges (Multi-Color Dynamic Pills)
+    # Metadata Badges (Multi-Color Dynamic Contrast Pills)
     # --------------------------------------------------------
     pill_y = story_y + (len(story_lines_wrapped) * 41) + 26
     pill_x = left_x
@@ -553,7 +624,7 @@ async def create_imdb_banner(info, bot_username=None):
 
     for idx, item in enumerate(pill_items):
         cur_color = colors[idx % len(colors)]
-        pill_fill = (cur_color[0], cur_color[1], cur_color[2], 240)
+        pill_fill = (cur_color[0], cur_color[1], cur_color[2], 245)
 
         rect = _draw_pill(
             canvas,
@@ -561,8 +632,6 @@ async def create_imdb_banner(info, bot_username=None):
             item,
             pill_font,
             fill=pill_fill,
-            outline=None,
-            text_fill=(255, 255, 255, 255),
             padding_x=20,
             padding_y=8,
             radius=18,
@@ -570,7 +639,7 @@ async def create_imdb_banner(info, bot_username=None):
         pill_x = rect[2] + 14
 
     # --------------------------------------------------------
-    # Bottom Telegram Username Badge
+    # Bottom Telegram Username Badge (Frosted Glass Blur)
     # --------------------------------------------------------
     tg_y = pill_y + 54
     _draw_telegram_badge(canvas, (left_x, tg_y), username, handle_font)
