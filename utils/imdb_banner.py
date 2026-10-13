@@ -677,17 +677,15 @@ async def create_imdb_banner(info, bot_username=None):
     )
 
     # --------------------------------------------------------
-    # Export Ultra-High-Quality JPEG (Sharp text & No blur artifacts)
+    # Export Lossless Master Quality (100% Pure Image Quality)
     # --------------------------------------------------------
     output = io.BytesIO()
-    canvas.convert("RGB").save(
+    canvas.save(
         output,
-        format="JPEG",
-        quality=96,
-        subsampling=0,
+        format="PNG",
         optimize=True,
     )
     output.seek(0)
-    output.name = "imdb_banner.jpg"
+    output.name = "imdb_banner.png"
 
     return output
