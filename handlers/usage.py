@@ -5,7 +5,7 @@ import psutil
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from pyrogram import filters
+from pyrogram import filters, enums
 from pyrogram.types import Message
 
 from bot import app
@@ -119,34 +119,31 @@ def build_usage_message(
     if refresh_line:
 
         refresh_text = (
-            f"\n\n**{refresh_line}**"
+            f"\n\n<i>{refresh_line}</i>"
         )
 
-    return f"""
-**🧿 CINEMAVETA USAGE **
+    return f"""<blockquote><b>🧿 CINEMAVETA USAGE </b>
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
-**🖥 CPU  {status_icon(cpu)}  {cpu:.1f}%**
-   **[ {progress_bar(cpu)} ]**
+<b>🖥 CPU  {status_icon(cpu)}  {cpu:.1f}%</b>
+   <b>[ {progress_bar(cpu)} ]</b>
 
-**🧠 RAM  {status_icon(ram_percent)}  {ram_percent:.1f}%**
-   **[ {progress_bar(ram_percent)} ]**
+<b>🧠 RAM  {status_icon(ram_percent)}  {ram_percent:.1f}%</b>
+   <b>[ {progress_bar(ram_percent)} ]</b>
 
-**💾 Disk  {status_icon(disk_percent)}  {disk_percent:.1f}%**
-   **[ {progress_bar(disk_percent)} ]**
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-**🌱 MongoDB  {mongo_status}**
-**💿 Used   »** `{mongo_used_mb:.2f} MB`
-**📀 Free   »** `{mongo_free_mb:.2f} MB`
-**☢️ Usage  »** `{mongo_percent:.1f}%`
+<b>💾 Disk  {status_icon(disk_percent)}  {disk_percent:.1f}%</b>
+   <b>[ {progress_bar(disk_percent)} ]</b>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
-**⏰ Uptime   »** `{format_uptime()}`
-{refresh_text}
-"""
+<b>🌱 MongoDB  {mongo_status}</b>
+<b>💿 Used   »</b> <code>{mongo_used_mb:.2f} MB</code>
+<b>📀 Free   »</b> <code>{mongo_free_mb:.2f} MB</code>
+<b>☢️ Usage  »</b> <code>{mongo_percent:.1f}%</code>
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>⏰ Uptime   »</b> <code>{format_uptime()}</code>{refresh_text}</blockquote>"""
 
 
 # ================= USAGE COMMAND ================= #
@@ -164,24 +161,27 @@ async def usage_command(
         return
 
     # ================= INITIAL MESSAGE (VIDEO / TEXT QUOTE REPLY) ================= #
-    initial_caption = "✨ **Checking Usage...**"
+    initial_caption = "<blockquote>✨ <b>Checking Usage...</b></blockquote>"
 
     if USAGE_VIDEO:
         try:
             msg = await message.reply_video(
                 video=USAGE_VIDEO,
                 caption=initial_caption,
+                parse_mode=enums.ParseMode.HTML,
                 quote=True
             )
         except Exception as e:
             print(f"⚠️ Video reply failed ({e}), sending text instead...", flush=True)
             msg = await message.reply_text(
                 initial_caption,
+                parse_mode=enums.ParseMode.HTML,
                 quote=True
             )
     else:
         msg = await message.reply_text(
             initial_caption,
+            parse_mode=enums.ParseMode.HTML,
             quote=True
         )
 
@@ -303,9 +303,15 @@ async def usage_command(
             )
 
             if msg.video:
-                await msg.edit_caption(caption=updated_text)
+                await msg.edit_caption(
+                    caption=updated_text,
+                    parse_mode=enums.ParseMode.HTML
+                )
             else:
-                await msg.edit_text(text=updated_text)
+                await msg.edit_text(
+                    text=updated_text,
+                    parse_mode=enums.ParseMode.HTML
+                )
 
             # ================= WAIT ================= #
 
@@ -402,9 +408,15 @@ async def usage_command(
         )
 
         if msg.video:
-            await msg.edit_caption(caption=final_text)
+            await msg.edit_caption(
+                caption=final_text,
+                parse_mode=enums.ParseMode.HTML
+            )
         else:
-            await msg.edit_text(text=final_text)
+            await msg.edit_text(
+                text=final_text,
+                parse_mode=enums.ParseMode.HTML
+            )
 
     except Exception as e:
 
