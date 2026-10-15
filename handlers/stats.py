@@ -1,7 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from pyrogram import filters
+from pyrogram import filters, enums
 from pyrogram.types import Message
 
 from bot import app
@@ -36,24 +36,27 @@ async def stats_command(
         return
 
     # ================= INITIAL MESSAGE (VIDEO/TEXT QUOTE REPLY) ================= #
-    initial_caption = "✨ **Checking Stats...**"
+    initial_caption = "<blockquote>✨ <b>Checking Stats...</b></blockquote>"
 
     if STATS_VIDEO:
         try:
             msg = await message.reply_video(
                 video=STATS_VIDEO,
                 caption=initial_caption,
+                parse_mode=enums.ParseMode.HTML,
                 quote=True
             )
         except Exception as e:
             print(f"⚠️ Video reply failed ({e}), sending text instead...", flush=True)
             msg = await message.reply_text(
                 initial_caption,
+                parse_mode=enums.ParseMode.HTML,
                 quote=True
             )
     else:
         msg = await message.reply_text(
             initial_caption,
+            parse_mode=enums.ParseMode.HTML,
             quote=True
         )
 
@@ -183,8 +186,7 @@ async def stats_command(
     # STATS MESSAGE FORMATTING
     # ========================================================
 
-    stats_text = f"""
-📊 <b>𝖢𝗂𝗇𝖾𝗆𝖺𝖵𝖾𝗍𝖺 𝖲𝗍𝖺𝗍𝗂𝗌𝗍𝗂𝖼𝗌</b>
+    stats_text = f"""<blockquote>📊 <b>𝖢𝗂𝗇𝖾𝗆𝖺𝖵𝖾𝗍𝖺 𝖲𝗍𝖺𝗍𝗂𝗌𝗍𝗂𝖼𝗌</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
 🔷 <b>𝖳𝗈𝗍𝖺𝗅 𝖴𝗌𝖾𝗋𝗌</b>   »   <code>{total_users}</code>
@@ -197,16 +199,21 @@ async def stats_command(
 
 🔷 <b>𝖴𝗉𝗍𝗂𝗆𝖾</b>   »   <code>{uptime_text}</code>
 
-━━━━━━━━━━━━━━━━━━━━━━━━
-"""
+━━━━━━━━━━━━━━━━━━━━━━━━</blockquote>"""
 
     # ========================================================
     # EDIT VIDEO CAPTION OR TEXT
     # ========================================================
     try:
         if msg.video:
-            await msg.edit_caption(caption=stats_text)
+            await msg.edit_caption(
+                caption=stats_text,
+                parse_mode=enums.ParseMode.HTML
+            )
         else:
-            await msg.edit_text(text=stats_text)
+            await msg.edit_text(
+                text=stats_text,
+                parse_mode=enums.ParseMode.HTML
+            )
     except Exception as e:
         print(f"⚠️ Failed to edit stats message: {e}", flush=True)
