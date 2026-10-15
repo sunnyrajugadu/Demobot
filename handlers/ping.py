@@ -1,7 +1,7 @@
 import asyncio
 from time import perf_counter
 
-from pyrogram import filters
+from pyrogram import filters, enums
 from pyrogram.types import Message
 
 from bot import app
@@ -43,17 +43,14 @@ def build_ping_message(
     if remaining is not None:
         refresh_line = (
             f"\n\n"
-            f"**⏱️ Auto stops in {remaining}s "
-            f"• Refreshes every 5s**"
+            f"<i>⏱️ Auto stops in {remaining}s "
+            f"• Refreshes every 5s</i>"
         )
 
-    return f"""
-🏓 **Pong!**
+    return f"""<blockquote>🏓 <b>Pong!</b>
 
-┌ **Latency**  : **{latency:.3f} ms**
-└ **Quality**  : **{quality}**
-{refresh_line}
-"""
+<b>┌ Latency</b>  : <b>{latency:.3f} ms</b>
+<b>└ Quality</b>  : <b>{quality}</b>{refresh_line}</blockquote>"""
 
 
 # ================= PING COMMAND ================= #
@@ -73,24 +70,27 @@ async def ping_command(
             return
 
         # ================= SEND INITIAL VIDEO WITH CAPTION ================= #
-        initial_caption = "🏓 **Pinging...**"
+        initial_caption = "<blockquote>🏓 <b>Pinging...</b></blockquote>"
 
         if PING_VIDEO:
             try:
                 msg = await message.reply_video(
                     video=PING_VIDEO,
                     caption=initial_caption,
+                    parse_mode=enums.ParseMode.HTML,
                     quote=True
                 )
             except Exception as e:
                 print(f"⚠️ Video reply failed ({e}), sending text instead...", flush=True)
                 msg = await message.reply_text(
                     initial_caption,
+                    parse_mode=enums.ParseMode.HTML,
                     quote=True
                 )
         else:
             msg = await message.reply_text(
                 initial_caption,
+                parse_mode=enums.ParseMode.HTML,
                 quote=True
             )
 
@@ -126,9 +126,15 @@ async def ping_command(
                 # ================= UPDATE CAPTION / TEXT ================= #
 
                 if msg.video:
-                    await msg.edit_caption(caption=new_caption)
+                    await msg.edit_caption(
+                        caption=new_caption,
+                        parse_mode=enums.ParseMode.HTML
+                    )
                 else:
-                    await msg.edit_text(text=new_caption)
+                    await msg.edit_text(
+                        text=new_caption,
+                        parse_mode=enums.ParseMode.HTML
+                    )
 
             except Exception as e:
 
@@ -156,9 +162,15 @@ async def ping_command(
             )
 
             if msg.video:
-                await msg.edit_caption(caption=final_caption)
+                await msg.edit_caption(
+                    caption=final_caption,
+                    parse_mode=enums.ParseMode.HTML
+                )
             else:
-                await msg.edit_text(text=final_caption)
+                await msg.edit_text(
+                    text=final_caption,
+                    parse_mode=enums.ParseMode.HTML
+                )
 
         except Exception as e:
 
