@@ -1,14 +1,16 @@
 import io
+import html
+import json
 import random
 import asyncio
 import aiohttp
 from bson import ObjectId
 
-from pyrogram import filters
+from pyrogram import filters, enums
 from pyrogram.types import Message
 
 from bot import app
-from config import START_IMAGES
+from config import START_IMAGES, BOT_TOKEN
 from database.models import (
     save_user,
     save_chat,
@@ -34,6 +36,37 @@ HTTP_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 }
+
+
+def convert_markup_to_dict(markup) -> dict | None:
+    """Converts Pyrogram InlineKeyboardMarkup to Bot API JSON dict so native HTML blockquote always renders."""
+    if not markup or not getattr(markup, "inline_keyboard", None):
+        return None
+    keyboard = []
+    for row in markup.inline_keyboard:
+        btn_row = []
+        for btn in row:
+            b = {"text": btn.text}
+            if getattr(btn, "url", None):
+                b["url"] = btn.url
+            elif getattr(btn, "callback_data", None):
+                b["callback_data"] = (
+                    btn.callback_data.decode()
+                    if isinstance(btn.callback_data, bytes)
+                    else str(btn.callback_data)
+                )
+            elif getattr(btn, "switch_inline_query_current_chat", None) is not None:
+                b["switch_inline_query_current_chat"] = btn.switch_inline_query_current_chat
+            elif getattr(btn, "switch_inline_query", None) is not None:
+                b["switch_inline_query"] = btn.switch_inline_query
+            elif getattr(btn, "web_app", None):
+                b["web_app"] = {"url": btn.web_app.url}
+            elif getattr(btn, "user_id", None):
+                b["url"] = f"tg://user?id={btn.user_id}"
+            btn_row.append(b)
+        if btn_row:
+            keyboard.append(btn_row)
+    return {"inline_keyboard": keyboard}
 
 
 async def download_image_stream(url: str) -> io.BytesIO | None:
@@ -120,8 +153,6 @@ async def start_command(
     # ========================================================
 
     try:
-        from config import BOT_TOKEN
-
         reaction_url = (
             f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
         )
@@ -443,12 +474,18 @@ async def start_command(
     # NORMAL /START MESSAGE (WITH QUOTE BOX)
     # ========================================================
 
+    safe_name = html.escape(user.first_name or "User")
+    user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
+
     caption = (
-        f"<blockquote><b>🎬✨ Hey {user.mention}! 👋\n\n"
+        f"<blockquote><b>🎬✨ Hey {user_link}! 👋\n\n"
         "✨ Welcome to CinemaVeta 🍿🔥\n\n"
         "🔍 Search your favorite Movies & Series\n\n"
         "💭 Just type the movie name and get files instantly 🚀</b></blockquote>"
     )
+
+    markup = start_buttons()
+    markup_dict = convert_markup_to_dict(markup)
 
 
     # ========================================================
@@ -456,10 +493,30 @@ async def start_command(
     # ========================================================
 
     if not START_IMAGES:
+        try:
+            send_msg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            msg_payload = {
+                "chat_id": message.chat.id,
+                "text": caption,
+                "parse_mode": "HTML",
+                "reply_to_message_id": message.id,
+                "allow_sending_without_reply": True
+            }
+            if markup_dict:
+                msg_payload["reply_markup"] = markup_dict
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0)) as session:
+                async with session.post(send_msg_url, json=msg_payload) as resp:
+                    res = await resp.json(content_type=None)
+                    if resp.status == 200 and res.get("ok"):
+                        return
+        except Exception:
+            pass
 
         return await message.reply_text(
             text=caption,
-            reply_markup=start_buttons(),
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=markup,
             quote=True
         )
 
@@ -470,15 +527,41 @@ async def start_command(
 
 
     # ========================================================
-    # 1. Direct Telegram Media Dispatch
+    # 1. Direct Telegram Media Dispatch (Bot API HTML for Guaranteed Quote Box)
     # ========================================================
+
+    try:
+        send_photo_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+        photo_payload = {
+            "chat_id": message.chat.id,
+            "photo": selected_url,
+            "caption": caption,
+            "parse_mode": "HTML",
+            "reply_to_message_id": message.id,
+            "allow_sending_without_reply": True
+        }
+        if markup_dict:
+            photo_payload["reply_markup"] = markup_dict
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5.0)) as session:
+            async with session.post(send_photo_url, json=photo_payload) as resp:
+                res = await resp.json(content_type=None)
+                if resp.status == 200 and res.get("ok"):
+                    print(
+                        "⚡ INSTANT CONFIG PHOTO SENT (WITH QUOTE BOX)",
+                        flush=True
+                    )
+                    return
+    except Exception as api_err:
+        print(f"⚠️ Bot API sendPhoto fallback: {api_err}", flush=True)
 
     try:
 
         await message.reply_photo(
             photo=selected_url,
             caption=caption,
-            reply_markup=start_buttons(),
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=markup,
             quote=True
         )
 
@@ -512,11 +595,43 @@ async def start_command(
         bio.seek(0)
 
         try:
+            send_photo_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+            form = aiohttp.FormData()
+            form.add_field("chat_id", str(message.chat.id))
+            form.add_field("caption", caption)
+            form.add_field("parse_mode", "HTML")
+            form.add_field("reply_to_message_id", str(message.id))
+            form.add_field("allow_sending_without_reply", "true")
+            if markup_dict:
+                form.add_field("reply_markup", json.dumps(markup_dict))
+            form.add_field(
+                "photo",
+                bio.getvalue(),
+                filename="start_image.jpg",
+                content_type="image/jpeg"
+            )
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6.0)) as session:
+                async with session.post(send_photo_url, data=form) as resp:
+                    res = await resp.json(content_type=None)
+                    if resp.status == 200 and res.get("ok"):
+                        print(
+                            "⚡ BUFFER STREAM PHOTO SENT (WITH QUOTE BOX)",
+                            flush=True
+                        )
+                        return
+        except Exception:
+            pass
+
+        bio.seek(0)
+
+        try:
 
             await message.reply_photo(
                 photo=bio,
                 caption=caption,
-                reply_markup=start_buttons(),
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=markup,
                 quote=True
             )
 
@@ -535,8 +650,29 @@ async def start_command(
     # 3. Text fallback if image loading fails completely
     # ========================================================
 
+    try:
+        send_msg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        msg_payload = {
+            "chat_id": message.chat.id,
+            "text": caption,
+            "parse_mode": "HTML",
+            "reply_to_message_id": message.id,
+            "allow_sending_without_reply": True
+        }
+        if markup_dict:
+            msg_payload["reply_markup"] = markup_dict
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0)) as session:
+            async with session.post(send_msg_url, json=msg_payload) as resp:
+                res = await resp.json(content_type=None)
+                if resp.status == 200 and res.get("ok"):
+                    return
+    except Exception:
+        pass
+
     await message.reply_text(
         text=caption,
-        reply_markup=start_buttons(),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=markup,
         quote=True
     )
