@@ -478,7 +478,7 @@ async def start_command(
     user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
 
     caption = (
-        f"<blockquote><b>🎬✨ Hey {user_link}! 👋\n\n"
+        f"<blockquote><b>Hey {user_link}! 👋\n\n"
         "✨ Welcome to CinemaVeta 🍿🔥\n\n"
         "🔍 Search your favorite Movies & Series\n\n"
         "💭 Just type the movie name and get files instantly 🚀</b></blockquote>"
