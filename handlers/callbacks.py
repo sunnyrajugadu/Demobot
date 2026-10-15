@@ -1,11 +1,12 @@
 import asyncio
 import html
 import re
+import aiohttp
 from datetime import datetime
 
 from bson import ObjectId
 
-from pyrogram import filters
+from pyrogram import filters, enums
 from pyrogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -13,7 +14,8 @@ from pyrogram.types import (
 )
 
 from config import (
-    STORAGE_CHANNEL_ID
+    STORAGE_CHANNEL_ID,
+    BOT_TOKEN
 )
 
 from bot import app
@@ -43,6 +45,80 @@ print(
     "✅ callbacks.py imported",
     flush=True
 )
+
+
+def convert_markup_to_dict(markup) -> dict | None:
+    """Converts Pyrogram InlineKeyboardMarkup to Bot API JSON dict so native HTML blockquote always renders."""
+    if not markup or not getattr(markup, "inline_keyboard", None):
+        return None
+    keyboard = []
+    for row in markup.inline_keyboard:
+        btn_row = []
+        for btn in row:
+            b = {"text": btn.text}
+            if getattr(btn, "url", None):
+                b["url"] = btn.url
+            elif getattr(btn, "callback_data", None):
+                b["callback_data"] = (
+                    btn.callback_data.decode()
+                    if isinstance(btn.callback_data, bytes)
+                    else str(btn.callback_data)
+                )
+            elif getattr(btn, "switch_inline_query_current_chat", None) is not None:
+                b["switch_inline_query_current_chat"] = btn.switch_inline_query_current_chat
+            elif getattr(btn, "switch_inline_query", None) is not None:
+                b["switch_inline_query"] = btn.switch_inline_query
+            elif getattr(btn, "web_app", None):
+                b["web_app"] = {"url": btn.web_app.url}
+            elif getattr(btn, "user_id", None):
+                b["url"] = f"tg://user?id={btn.user_id}"
+            btn_row.append(b)
+        if btn_row:
+            keyboard.append(btn_row)
+    return {"inline_keyboard": keyboard}
+
+
+async def edit_caption_with_quote(query: CallbackQuery, caption_html: str, markup: InlineKeyboardMarkup):
+    """Edits message caption/text via Telegram Bot API so <blockquote> renders on any Pyrogram version."""
+    markup_dict = convert_markup_to_dict(markup)
+    is_media = bool(query.message and (query.message.photo or query.message.video or query.message.document or query.message.animation))
+
+    try:
+        method = "editMessageCaption" if is_media else "editMessageText"
+        api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+        payload = {
+            "chat_id": query.message.chat.id,
+            "message_id": query.message.id,
+            "parse_mode": "HTML"
+        }
+        if is_media:
+            payload["caption"] = caption_html
+        else:
+            payload["text"] = caption_html
+
+        if markup_dict:
+            payload["reply_markup"] = markup_dict
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0)) as session:
+            async with session.post(api_url, json=payload) as resp:
+                res = await resp.json(content_type=None)
+                if resp.status == 200 and res.get("ok"):
+                    return
+    except Exception as api_err:
+        print(f"⚠️ Bot API edit fallback: {api_err}", flush=True)
+
+    if is_media:
+        await query.message.edit_caption(
+            caption=caption_html,
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=markup
+        )
+    else:
+        await query.message.edit_text(
+            text=caption_html,
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=markup
+        )
 
 
 # ============================================================
@@ -1187,7 +1263,7 @@ async def fsub_retry_callback(
 
 
 # ============================================================
-# HOME / ABOUT
+# HOME / ABOUT (WITH QUOTE BOX)
 # ============================================================
 
 @app.on_callback_query(
@@ -1220,19 +1296,20 @@ async def home_about_callback(
         if query.data == "home_about":
 
             about_text = (
-                f"✯ <b>𝐁𝐨𝐭 𝐍𝐚𝐦𝐞:</b> {bot_name}\n"
+                f"<blockquote>✯ <b>𝐁𝐨𝐭 𝐍𝐚𝐦𝐞:</b> {bot_name}\n"
                 '✯ <b>𝐂𝐫𝐞𝐚𝐭𝐨𝐫 :</b> '
                 '<a href="https://t.me/mrDuDeHoLic">'
                 '<b>mrDuDeHoLic</b>'
                 '</a>\n\n'
                 "📝 ʟᴀɴɢᴜᴀɢᴇ : Python\n\n"
                 "📡 ʜᴏsᴛᴇᴅ ᴏɴ : VPS\n\n"
-                "🌟 ᴠᴇʀsɪᴏɴ : 2.0"
+                "🌟 ᴠᴇʀsɪᴏɴ : 2.0</blockquote>"
             )
 
-            await query.message.edit_caption(
-                caption=about_text,
-                reply_markup=about_buttons()
+            await edit_caption_with_quote(
+                query=query,
+                caption_html=about_text,
+                markup=about_buttons()
             )
 
             await query.answer()
@@ -1243,17 +1320,20 @@ async def home_about_callback(
         # ====================================================
 
         user = query.from_user
+        safe_name = html.escape(user.first_name or "User")
+        user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
 
         home_caption = (
-            f"**🎬✨ Hey {user.mention}! 👋\n\n"
+            f"<blockquote><b>🎬✨ Hey {user_link}! 👋\n\n"
             "✨ Welcome to CinemaVeta 🍿🔥\n\n"
             "🔍 Search your favorite Movies & Series\n\n"
-            "💭 Just type the movie name and get files instantly** 🚀\n\n"
+            "💭 Just type the movie name and get files instantly 🚀</b></blockquote>"
         )
 
-        await query.message.edit_caption(
-            caption=home_caption,
-            reply_markup=start_buttons()
+        await edit_caption_with_quote(
+            query=query,
+            caption_html=home_caption,
+            markup=start_buttons()
         )
 
         await query.answer()
