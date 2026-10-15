@@ -440,14 +440,14 @@ async def start_command(
 
 
     # ========================================================
-    # NORMAL /START MESSAGE
+    # NORMAL /START MESSAGE (WITH QUOTE BOX)
     # ========================================================
 
     caption = (
-        f"**🎬✨ Hey {user.mention}! 👋\n\n"
+        f"<blockquote><b>🎬✨ Hey {user.mention}! 👋\n\n"
         "✨ Welcome to CinemaVeta 🍿🔥\n\n"
         "🔍 Search your favorite Movies & Series\n\n"
-        "💭 Just type the movie name and get files instantly** 🚀\n\n"
+        "💭 Just type the movie name and get files instantly 🚀</b></blockquote>"
     )
 
 
