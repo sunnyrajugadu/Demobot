@@ -1,678 +1,251 @@
-import io
-import html
-import json
-import random
-import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import aiohttp
-from bson import ObjectId
 
 from pyrogram import filters, enums
 from pyrogram.types import Message
 
 from bot import app
-from config import START_IMAGES, BOT_TOKEN
-from database.models import (
-    save_user,
-    save_chat,
-    update_activity,
-    get_user,
-    files
-)
-from keyboards.buttons import start_buttons
-from utils.logger import send_log
-from utils.caption import make_file_caption
+from config import STATS_VIDEO, BOT_TOKEN
+from database import get_collection
 from filters.fsub import enforce_fsub
 
 
-print(
-    "✅ start.py imported",
-    flush=True
+# ============================================================
+# BOT START TIME
+# ============================================================
+
+BOT_START_TIME = datetime.now(
+    ZoneInfo("Asia/Kolkata")
 )
 
 
-HTTP_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-}
+# ============================================================
+# HELPER: GUARANTEED BLOCKQUOTE FOR VIDEO CAPTION & TEXT
+# ============================================================
 
+async def edit_stats_with_quote(msg: Message, html_text: str):
+    """Edits video caption or text via Telegram Bot API so <blockquote> always renders."""
+    is_media = bool(msg.video or msg.photo or msg.document or msg.animation)
+    method = "editMessageCaption" if is_media else "editMessageText"
+    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
 
-def convert_markup_to_dict(markup) -> dict | None:
-    """Converts Pyrogram InlineKeyboardMarkup to Bot API JSON dict so native HTML blockquote always renders."""
-    if not markup or not getattr(markup, "inline_keyboard", None):
-        return None
-    keyboard = []
-    for row in markup.inline_keyboard:
-        btn_row = []
-        for btn in row:
-            b = {"text": btn.text}
-            if getattr(btn, "url", None):
-                b["url"] = btn.url
-            elif getattr(btn, "callback_data", None):
-                b["callback_data"] = (
-                    btn.callback_data.decode()
-                    if isinstance(btn.callback_data, bytes)
-                    else str(btn.callback_data)
-                )
-            elif getattr(btn, "switch_inline_query_current_chat", None) is not None:
-                b["switch_inline_query_current_chat"] = btn.switch_inline_query_current_chat
-            elif getattr(btn, "switch_inline_query", None) is not None:
-                b["switch_inline_query"] = btn.switch_inline_query
-            elif getattr(btn, "web_app", None):
-                b["web_app"] = {"url": btn.web_app.url}
-            elif getattr(btn, "user_id", None):
-                b["url"] = f"tg://user?id={btn.user_id}"
-            btn_row.append(b)
-        if btn_row:
-            keyboard.append(btn_row)
-    return {"inline_keyboard": keyboard}
+    payload = {
+        "chat_id": msg.chat.id,
+        "message_id": msg.id,
+        "parse_mode": "HTML"
+    }
+    if is_media:
+        payload["caption"] = html_text
+    else:
+        payload["text"] = html_text
 
-
-async def download_image_stream(url: str) -> io.BytesIO | None:
-    """Fallback to stream into RAM if Telegram fails to download directly from the URL."""
     try:
-        async with aiohttp.ClientSession(
-            headers=HTTP_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=2.0)
-        ) as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                    if data:
-                        bio = io.BytesIO(data)
-                        bio.name = "start_image.jpg"
-                        return bio
-    except Exception:
-        pass
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0)) as session:
+            async with session.post(api_url, json=payload) as resp:
+                res = await resp.json(content_type=None)
+                if resp.status == 200 and res.get("ok"):
+                    return
+    except Exception as api_err:
+        print(f"⚠️ Bot API stats edit fallback: {api_err}", flush=True)
 
-    return None
-
-
-async def process_user_db(
-    user_id: int,
-    username: str,
-    chat_id: int,
-    chat_type: str
-):
-    """Executes DB updates & logs in background so /start responds instantly without delay."""
-    try:
-        existing = await get_user(user_id)
-        is_new = existing is None
-
-        await save_user(user_id, username)
-        await update_activity(user_id)
-        await save_chat(
-            chat_id=chat_id,
-            chat_type=chat_type,
-            user_id=user_id
+    if is_media:
+        await msg.edit_caption(
+            caption=html_text,
+            parse_mode=enums.ParseMode.HTML
         )
-
-        if is_new:
-            await send_log(
-                f"""
-📈 <b>New User Started Bot</b>
-
-🆔 ID: <code>{user_id}</code>
-👤 Username: @{username if username else "No Username"}
-⚡ Action: START
-"""
-            )
-
-    except Exception as e:
-        print(
-            f"[start bg task] error: {e}",
-            flush=True
+    else:
+        await msg.edit_text(
+            text=html_text,
+            parse_mode=enums.ParseMode.HTML
         )
 
 
 # ============================================================
-# /START HANDLER (PRIVATE ONLY - INSTANT SPEED)
+# STATS COMMAND
 # ============================================================
 
 @app.on_message(
-    filters.private & filters.command("start")
+    filters.command("stats")
 )
-async def start_command(
+async def stats_command(
     client,
     message: Message
 ):
-    print(
-        "START HANDLER CALLED",
-        flush=True
-    )
 
-    user = message.from_user
-
-    if not user:
+    # ================= ONE-LINE FSUB ENFORCEMENT ================= #
+    if not await enforce_fsub(client, message, payload="/stats"):
         return
 
+    # ================= INITIAL MESSAGE (VIDEO/TEXT QUOTE REPLY) ================= #
+    initial_caption = "<blockquote>✨ <b>Checking Stats...</b></blockquote>"
+
+    if STATS_VIDEO:
+        try:
+            msg = await message.reply_video(
+                video=STATS_VIDEO,
+                caption=initial_caption,
+                parse_mode=enums.ParseMode.HTML,
+                quote=True
+            )
+            await edit_stats_with_quote(msg, initial_caption)
+        except Exception as e:
+            print(f"⚠️ Video reply failed ({e}), sending text instead...", flush=True)
+            msg = await message.reply_text(
+                initial_caption,
+                parse_mode=enums.ParseMode.HTML,
+                quote=True
+            )
+            await edit_stats_with_quote(msg, initial_caption)
+    else:
+        msg = await message.reply_text(
+            initial_caption,
+            parse_mode=enums.ParseMode.HTML,
+            quote=True
+        )
+        await edit_stats_with_quote(msg, initial_caption)
 
     # ========================================================
-    # 1. REACT TO USER'S /START COMMAND FIRST
+    # COLLECTIONS
     # ========================================================
 
-    try:
-        reaction_url = (
-            f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
-        )
-
-        reaction_payload = {
-            "chat_id": message.chat.id,
-            "message_id": message.id,
-            "reaction": [
-                {
-                    "type": "emoji",
-                    "emoji": "💋"
-                }
-            ],
-            "is_big": True
-        }
-
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=3.0)
-        ) as session:
-            async with session.post(
-                reaction_url,
-                json=reaction_payload
-            ) as response:
-
-                result = await response.json(
-                    content_type=None
-                )
-
-                if response.status == 200 and result.get("ok"):
-                    print(
-                        "💋 START MESSAGE REACTION SENT",
-                        flush=True
-                    )
-                else:
-                    print(
-                        f"⚠ START REACTION FAILED: {result}",
-                        flush=True
-                    )
-
-    except Exception as e:
-        print(
-            f"⚠️ START REACTION FAILED: {e}",
-            flush=True
-        )
-
-    # Reaction motham pop up avvadaniki 1.5 seconds delay
-    await asyncio.sleep(1.5)
-
-
-    # ====================================================
-    # Background task for database and logging
-    # ====================================================
-
-    asyncio.create_task(
-        process_user_db(
-            user_id=user.id,
-            username=user.username,
-            chat_id=message.chat.id,
-            chat_type=message.chat.type.value
-        )
+    users = get_collection(
+        "users"
     )
 
+    files = get_collection(
+        "files"
+    )
 
-    # ====================================================
-    # PAYLOAD / DEEP LINK CHECK
-    # ====================================================
+    chats = get_collection(
+        "chats"
+    )
 
-    if len(message.command) > 1:
+    # ========================================================
+    # TOTAL USERS
+    # ========================================================
 
-        payload = message.command[1].strip()
+    total_users = await users.count_documents(
+        {}
+    )
 
+    # ========================================================
+    # TOTAL FILES
+    # ========================================================
 
-        # =================================================
-        # 1. INLINE FSUB TRIGGER
-        # =================================================
+    total_files = await files.count_documents(
+        {}
+    )
 
-        if payload in [
-            "inline_fsub",
-            "fsub"
+    # ========================================================
+    # TOTAL CHATS
+    # ========================================================
+
+    total_chats = await chats.count_documents(
+        {}
+    )
+
+    # ========================================================
+    # TOTAL STORAGE
+    # ========================================================
+
+    pipeline = [
+        {
+            "$group": {
+                "_id": None,
+                "total": {
+                    "$sum": "$file_size_bytes"
+                }
+            }
+        }
+    ]
+
+    result = await files.aggregate(
+        pipeline
+    ).to_list(1)
+
+    total_bytes = (
+        result[0]["total"]
+        if result
+        else 0
+    )
+
+    # ========================================================
+    # FORMAT STORAGE SIZE
+    # ========================================================
+
+    def format_size(
+        size
+    ):
+
+        for unit in [
+            "B",
+            "KB",
+            "MB",
+            "GB",
+            "TB"
         ]:
 
-            if not await enforce_fsub(
-                client,
-                message,
-                payload=f"/start {payload}"
-            ):
-                return
+            if size < 1024:
 
-            return await message.reply_text(
-                "✅ <b>You have joined all required channels!</b>\n\n"
-                "You can now use Inline search freely.",
-                reply_markup=start_buttons(),
-                quote=True
-            )
-
-
-        # =================================================
-        # 2. FILE DEEP LINK
-        # =================================================
-
-        if payload.startswith("file_"):
-
-            if not await enforce_fsub(
-                client,
-                message,
-                payload=f"/start {payload}"
-            ):
-                return
-
-
-            file_id = payload.replace(
-                "file_",
-                "",
-                1
-            ).strip()
-
-
-            # =================================================
-            # ObjectId validation
-            # =================================================
-
-            try:
-                object_id = ObjectId(file_id)
-
-            except Exception:
-                return await message.reply_text(
-                    "❌ Invalid file link.",
-                    quote=True
+                return (
+                    f"{size:.2f} {unit}"
                 )
 
+            size /= 1024
 
-            # =================================================
-            # Find file in database
-            # =================================================
-
-            try:
-                file = await files().find_one(
-                    {
-                        "_id": object_id
-                    }
-                )
-
-            except Exception as e:
-
-                print(
-                    f"[start] File lookup error: {e}",
-                    flush=True
-                )
-
-                return await message.reply_text(
-                    "❌ Unable to find the file.",
-                    quote=True
-                )
-
-
-            if not file:
-                return await message.reply_text(
-                    "❌ File not found.",
-                    quote=True
-                )
-
-
-            # =================================================
-            # Click logging in background
-            # =================================================
-
-            try:
-
-                file_name = (
-                    file.get("file_name")
-                    or "Unknown File"
-                )
-
-                file_size = (
-                    file.get("file_size_bytes")
-                    or 0
-                )
-
-                movie_name = (
-                    file.get("movie_name")
-                    or "Unknown"
-                )
-
-
-                if isinstance(
-                    file_size,
-                    (int, float)
-                ):
-
-                    if file_size >= 1024 ** 3:
-
-                        size_text = (
-                            f"{file_size / (1024 ** 3):.2f} GB"
-                        )
-
-                    elif file_size >= 1024 ** 2:
-
-                        size_text = (
-                            f"{file_size / (1024 ** 2):.2f} MB"
-                        )
-
-                    elif file_size >= 1024:
-
-                        size_text = (
-                            f"{file_size / 1024:.2f} KB"
-                        )
-
-                    else:
-
-                        size_text = (
-                            f"{file_size} B"
-                        )
-
-                else:
-
-                    size_text = str(
-                        file_size
-                    )
-
-
-                username = (
-                    f"@{user.username}"
-                    if user.username
-                    else "No Username"
-                )
-
-
-                asyncio.create_task(
-                    send_log(
-                        f"""
-🔗 <b>FILE LINK CLICKED</b>
-
-👤 <b>User:</b> {user.mention}
-🆔 <b>ID:</b> <code>{user.id}</code>
-👤 <b>Username:</b> {username}
-
-🎬 <b>Movie:</b> {movie_name}
-📒 <b>File:</b> {file_name}
-📪 <b>Size:</b> {size_text}
-
-🆔 <b>File ID:</b> <code>{file_id}</code>
-
-⚡ <b>Action:</b> FILE LINK CLICK
-"""
-                    )
-                )
-
-            except Exception as e:
-
-                print(
-                    f"[start] File log warning: {e}",
-                    flush=True
-                )
-
-
-            # =================================================
-            # Channel information
-            # =================================================
-
-            channel_id = file.get(
-                "channel_id"
-            )
-
-            message_id = file.get(
-                "message_id"
-            )
-
-
-            if not channel_id or not message_id:
-
-                return await message.reply_text(
-                    "❌ File information is incomplete.",
-                    quote=True
-                )
-
-
-            # =================================================
-            # File caption
-            # =================================================
-
-            try:
-                caption = make_file_caption(
-                    file
-                )
-
-            except Exception:
-                caption = None
-
-
-            # =================================================
-            # Copy file to user
-            # =================================================
-
-            try:
-
-                await client.copy_message(
-                    chat_id=user.id,
-                    from_chat_id=channel_id,
-                    message_id=int(message_id),
-                    caption=caption
-                )
-
-                return
-
-            except Exception as e:
-
-                print(
-                    f"[start] File send error: {e}",
-                    flush=True
-                )
-
-                return await message.reply_text(
-                    "❌ Unable to send the file.",
-                    quote=True
-                )
-
-
-    # ========================================================
-    # NORMAL /START MESSAGE (WITH QUOTE BOX)
-    # ========================================================
-
-    safe_name = html.escape(user.first_name or "User")
-    user_link = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
-
-    caption = (
-        f"<blockquote><b>Hey {user_link}! 👋\n\n"
-        "✨ Welcome to CinemaVeta 🍿🔥\n\n"
-        "🔍 Search your favorite Movies & Series\n\n"
-        "💭 Just type the movie name and get files instantly 🚀</b></blockquote>"
-    )
-
-    markup = start_buttons()
-    markup_dict = convert_markup_to_dict(markup)
-
-
-    # ========================================================
-    # If config list is empty, send text message
-    # ========================================================
-
-    if not START_IMAGES:
-        try:
-            send_msg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            msg_payload = {
-                "chat_id": message.chat.id,
-                "text": caption,
-                "parse_mode": "HTML",
-                "reply_to_message_id": message.id,
-                "allow_sending_without_reply": True
-            }
-            if markup_dict:
-                msg_payload["reply_markup"] = markup_dict
-
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0)) as session:
-                async with session.post(send_msg_url, json=msg_payload) as resp:
-                    res = await resp.json(content_type=None)
-                    if resp.status == 200 and res.get("ok"):
-                        return
-        except Exception:
-            pass
-
-        return await message.reply_text(
-            text=caption,
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=markup,
-            quote=True
+        return (
+            f"{size:.2f} PB"
         )
 
+    # ========================================================
+    # UPTIME
+    # ========================================================
 
-    selected_url = random.choice(
-        START_IMAGES
+    now = datetime.now(
+        ZoneInfo("Asia/Kolkata")
     )
 
+    uptime = (
+        now - BOT_START_TIME
+    )
+
+    days = uptime.days
+
+    hours, rem = divmod(
+        uptime.seconds,
+        3600
+    )
+
+    minutes, seconds = divmod(
+        rem,
+        60
+    )
+
+    uptime_text = (
+        f"{days}d {hours}h "
+        f"{minutes}m {seconds}s"
+    )
 
     # ========================================================
-    # 1. Direct Telegram Media Dispatch (Bot API HTML for Guaranteed Quote Box)
+    # STATS MESSAGE FORMATTING (WITH QUOTE BOX)
     # ========================================================
 
+    stats_text = (
+        "<blockquote>📊 <b>𝖢𝗂𝗇𝖾𝗆𝖺𝖵𝖾𝗍𝖺 𝖲𝗍𝖺𝗍𝗂𝗌𝗍𝗂𝖼𝗌</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔷 <b>𝖳𝗈𝗍𝖺𝗅 𝖴𝗌𝖾𝗋𝗌</b>   »   <code>{total_users}</code>\n\n"
+        f"🔷 <b>𝖳𝗈𝗍𝖺𝗅 𝖥𝗂𝗅𝖾𝗌</b>   »   <code>{total_files}</code>\n\n"
+        f"🔷 <b>𝖳𝗈𝗍𝖺𝗅 𝖢𝗁𝖺𝗍𝗌</b>   »   <code>{total_chats}</code>\n\n"
+        f"🔷 <b>𝖳𝗈𝗍𝖺𝗅 𝖲𝗍𝗈𝗋𝖺𝗀𝖾</b>   »   <code>{format_size(total_bytes)}</code>\n\n"
+        f"🔷 <b>𝖴𝗉𝗍𝗂𝗆𝖾</b>   »   <code>{uptime_text}</code>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━</blockquote>"
+    )
+
+    # ========================================================
+    # EDIT VIDEO CAPTION OR TEXT
+    # ========================================================
     try:
-        send_photo_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        photo_payload = {
-            "chat_id": message.chat.id,
-            "photo": selected_url,
-            "caption": caption,
-            "parse_mode": "HTML",
-            "reply_to_message_id": message.id,
-            "allow_sending_without_reply": True
-        }
-        if markup_dict:
-            photo_payload["reply_markup"] = markup_dict
-
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5.0)) as session:
-            async with session.post(send_photo_url, json=photo_payload) as resp:
-                res = await resp.json(content_type=None)
-                if resp.status == 200 and res.get("ok"):
-                    print(
-                        "⚡ INSTANT CONFIG PHOTO SENT (WITH QUOTE BOX)",
-                        flush=True
-                    )
-                    return
-    except Exception as api_err:
-        print(f"⚠️ Bot API sendPhoto fallback: {api_err}", flush=True)
-
-    try:
-
-        await message.reply_photo(
-            photo=selected_url,
-            caption=caption,
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=markup,
-            quote=True
-        )
-
-        print(
-            "⚡ INSTANT CONFIG PHOTO SENT",
-            flush=True
-        )
-
-        return
-
-    except Exception as err:
-
-        print(
-            f"⚠️ Direct link fetch failed ({err}), "
-            f"trying memory stream buffer...",
-            flush=True
-        )
-
-
-    # ========================================================
-    # 2. In-Memory Stream Fallback
-    # ========================================================
-
-    bio = await download_image_stream(
-        selected_url
-    )
-
-
-    if bio:
-
-        bio.seek(0)
-
-        try:
-            send_photo_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-            form = aiohttp.FormData()
-            form.add_field("chat_id", str(message.chat.id))
-            form.add_field("caption", caption)
-            form.add_field("parse_mode", "HTML")
-            form.add_field("reply_to_message_id", str(message.id))
-            form.add_field("allow_sending_without_reply", "true")
-            if markup_dict:
-                form.add_field("reply_markup", json.dumps(markup_dict))
-            form.add_field(
-                "photo",
-                bio.getvalue(),
-                filename="start_image.jpg",
-                content_type="image/jpeg"
-            )
-
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6.0)) as session:
-                async with session.post(send_photo_url, data=form) as resp:
-                    res = await resp.json(content_type=None)
-                    if resp.status == 200 and res.get("ok"):
-                        print(
-                            "⚡ BUFFER STREAM PHOTO SENT (WITH QUOTE BOX)",
-                            flush=True
-                        )
-                        return
-        except Exception:
-            pass
-
-        bio.seek(0)
-
-        try:
-
-            await message.reply_photo(
-                photo=bio,
-                caption=caption,
-                parse_mode=enums.ParseMode.HTML,
-                reply_markup=markup,
-                quote=True
-            )
-
-            print(
-                "⚡ BUFFER STREAM PHOTO SENT",
-                flush=True
-            )
-
-            return
-
-        except Exception:
-            pass
-
-
-    # ========================================================
-    # 3. Text fallback if image loading fails completely
-    # ========================================================
-
-    try:
-        send_msg_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        msg_payload = {
-            "chat_id": message.chat.id,
-            "text": caption,
-            "parse_mode": "HTML",
-            "reply_to_message_id": message.id,
-            "allow_sending_without_reply": True
-        }
-        if markup_dict:
-            msg_payload["reply_markup"] = markup_dict
-
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0)) as session:
-            async with session.post(send_msg_url, json=msg_payload) as resp:
-                res = await resp.json(content_type=None)
-                if resp.status == 200 and res.get("ok"):
-                    return
-    except Exception:
-        pass
-
-    await message.reply_text(
-        text=caption,
-        parse_mode=enums.ParseMode.HTML,
-        reply_markup=markup,
-        quote=True
-    )
+        await edit_stats_with_quote(msg, stats_text)
+    except Exception as e:
+        print(f"⚠️ Failed to edit stats message: {e}", flush=True)
