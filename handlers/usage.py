@@ -1,16 +1,15 @@
 import os
 import asyncio
 import psutil
-import aiohttp
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from pyrogram import filters, enums
+from pyrogram import filters
 from pyrogram.types import Message
 
 from bot import app
-from config import USAGE_VIDEO, BOT_TOKEN
+from config import USAGE_VIDEO
 from database import get_collection
 from filters.fsub import enforce_fsub
 
@@ -18,45 +17,6 @@ from filters.fsub import enforce_fsub
 BOT_START_TIME = datetime.now(
     ZoneInfo("Asia/Kolkata")
 )
-
-
-# ================= HELPER: GUARANTEED BLOCKQUOTE ================= #
-
-async def edit_usage_with_quote(msg: Message, html_text: str):
-    """Edits video caption or text via Telegram Bot API so <blockquote> always renders."""
-    is_media = bool(msg.video or msg.photo or msg.document or msg.animation)
-    method = "editMessageCaption" if is_media else "editMessageText"
-    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
-
-    payload = {
-        "chat_id": msg.chat.id,
-        "message_id": msg.id,
-        "parse_mode": "HTML"
-    }
-    if is_media:
-        payload["caption"] = html_text
-    else:
-        payload["text"] = html_text
-
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0)) as session:
-            async with session.post(api_url, json=payload) as resp:
-                res = await resp.json(content_type=None)
-                if resp.status == 200 and res.get("ok"):
-                    return
-    except Exception as api_err:
-        print(f"⚠️ Bot API usage edit fallback: {api_err}", flush=True)
-
-    if is_media:
-        await msg.edit_caption(
-            caption=html_text,
-            parse_mode=enums.ParseMode.HTML
-        )
-    else:
-        await msg.edit_text(
-            text=html_text,
-            parse_mode=enums.ParseMode.HTML
-        )
 
 
 # ================= UPTIME ================= #
@@ -138,7 +98,7 @@ def format_gib(value):
     )
 
 
-# ================= USAGE MESSAGE (WITH QUOTE BOX) ================= #
+# ================= USAGE MESSAGE ================= #
 
 def build_usage_message(
     cpu,
@@ -159,27 +119,34 @@ def build_usage_message(
     if refresh_line:
 
         refresh_text = (
-            f"\n\n<b>{refresh_line}</b>"
+            f"\n\n**{refresh_line}**"
         )
 
-    return (
-        "<blockquote><b>🧿 CINEMAVETA USAGE </b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>🖥 CPU  {status_icon(cpu)}  {cpu:.1f}%</b>\n"
-        f"   <b>[ {progress_bar(cpu)} ]</b>\n\n"
-        f"<b>🧠 RAM  {status_icon(ram_percent)}  {ram_percent:.1f}%</b>\n"
-        f"   <b>[ {progress_bar(ram_percent)} ]</b>\n\n"
-        f"<b>💾 Disk  {status_icon(disk_percent)}  {disk_percent:.1f}%</b>\n"
-        f"   <b>[ {progress_bar(disk_percent)} ]</b>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>🌱 MongoDB  {mongo_status}</b>\n"
-        f"<b>💿 Used   »</b> <code>{mongo_used_mb:.2f} MB</code>\n"
-        f"<b>📀 Free   »</b> <code>{mongo_free_mb:.2f} MB</code>\n"
-        f"<b>☢️ Usage  »</b> <code>{mongo_percent:.1f}%</code>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>⏰ Uptime   »</b> <code>{format_uptime()}</code>"
-        f"{refresh_text}</blockquote>"
-    )
+    return f"""
+**🧿 CINEMAVETA USAGE **
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+**🖥 CPU  {status_icon(cpu)}  {cpu:.1f}%**
+   **[ {progress_bar(cpu)} ]**
+
+**🧠 RAM  {status_icon(ram_percent)}  {ram_percent:.1f}%**
+   **[ {progress_bar(ram_percent)} ]**
+
+**💾 Disk  {status_icon(disk_percent)}  {disk_percent:.1f}%**
+   **[ {progress_bar(disk_percent)} ]**
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+**🌱 MongoDB  {mongo_status}**
+**💿 Used   »** `{mongo_used_mb:.2f} MB`
+**📀 Free   »** `{mongo_free_mb:.2f} MB`
+**☢️ Usage  »** `{mongo_percent:.1f}%`
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+**⏰ Uptime   »** `{format_uptime()}`
+{refresh_text}
+"""
 
 
 # ================= USAGE COMMAND ================= #
@@ -197,32 +164,26 @@ async def usage_command(
         return
 
     # ================= INITIAL MESSAGE (VIDEO / TEXT QUOTE REPLY) ================= #
-    initial_caption = "<blockquote>✨ <b>Checking Usage...</b></blockquote>"
+    initial_caption = "✨ **Checking Usage...**"
 
     if USAGE_VIDEO:
         try:
             msg = await message.reply_video(
                 video=USAGE_VIDEO,
                 caption=initial_caption,
-                parse_mode=enums.ParseMode.HTML,
                 quote=True
             )
-            await edit_usage_with_quote(msg, initial_caption)
         except Exception as e:
             print(f"⚠️ Video reply failed ({e}), sending text instead...", flush=True)
             msg = await message.reply_text(
                 initial_caption,
-                parse_mode=enums.ParseMode.HTML,
                 quote=True
             )
-            await edit_usage_with_quote(msg, initial_caption)
     else:
         msg = await message.reply_text(
             initial_caption,
-            parse_mode=enums.ParseMode.HTML,
             quote=True
         )
-        await edit_usage_with_quote(msg, initial_caption)
 
     # ================= DATABASE ================= #
 
@@ -341,7 +302,10 @@ async def usage_command(
                 refresh_line=refresh_line
             )
 
-            await edit_usage_with_quote(msg, updated_text)
+            if msg.video:
+                await msg.edit_caption(caption=updated_text)
+            else:
+                await msg.edit_text(text=updated_text)
 
             # ================= WAIT ================= #
 
@@ -437,7 +401,10 @@ async def usage_command(
             refresh_line=None
         )
 
-        await edit_usage_with_quote(msg, final_text)
+        if msg.video:
+            await msg.edit_caption(caption=final_text)
+        else:
+            await msg.edit_text(text=final_text)
 
     except Exception as e:
 
