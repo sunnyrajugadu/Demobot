@@ -71,6 +71,12 @@ CHANNEL_INVITE_LINK = get_env(
     "CHANNEL_INVITE_LINK"
 )
 
+AUTH_CHANNEL_2 = get_env("AUTH_CHANNEL_2")
+
+CHANNEL_INVITE_LINK_2 = get_env(
+    "CHANNEL_INVITE_LINK_2"
+)
+
 # START IMAGES #
 START_IMAGES = [
     "https://ibb.co/bjQS30sM",
