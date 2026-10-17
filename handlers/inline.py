@@ -12,7 +12,12 @@ from pyrogram.types import (
 
 from bot import app
 from database.models import files
-from handlers.callbacks import make_single_delete_message
+from handlers.callbacks import (
+    make_single_delete_message,
+    make_single_instruction_message,
+    delete_instruction_later,
+    delete_single_file_later
+)
 from utils.rename import clean_file_name
 from utils.caption import make_file_caption
 from config import STORAGE_CHANNEL_ID
@@ -256,34 +261,56 @@ async def inline_search_handler(client, query: InlineQuery):
             pass
 
 
-# ================= AUTO DELETE & SEND EXACT CALLBACK DELETED MESSAGE ================= #
+# ================= AUTO DELETE & SEND INSTRUCTION / NOTIFICATION MESSAGE ================= #
 
-@app.on_message(filters.via_bot & (filters.document | filters.video))
+@app.on_message(filters.via_bot & (filters.document | filters.video | filters.audio | filters.animation | filters.photo))
 async def auto_delete_inline_file(client, message):
     try:
-        await asyncio.sleep(300)
-        
         chat_id = message.chat.id
         user = message.from_user
-        
-        await message.delete()
-        
+
+        # 1. Send separate instruction message that deletes in 30 seconds
+        try:
+            instruction_msg = await client.send_message(
+                chat_id=chat_id,
+                text=make_single_instruction_message()
+            )
+            if instruction_msg:
+                asyncio.create_task(
+                    delete_instruction_later(
+                        client=client,
+                        chat_id=chat_id,
+                        message_id=instruction_msg.id
+                    )
+                )
+        except Exception as ins_err:
+            print(f"⚠️ Inline instruction message error: {ins_err}", flush=True)
+
+        # 2. Trigger standard 5 minutes auto-delete for the sent file
         if user:
-            delete_text = make_single_delete_message(user)
+            asyncio.create_task(
+                delete_single_file_later(
+                    client=client,
+                    chat_id=chat_id,
+                    message_id=message.id,
+                    user=user
+                )
+            )
         else:
+            # Fallback if user object is missing
+            asyncio.sleep(300)
+            await message.delete()
             delete_text = (
                 "⚠️ <b>Your Request Has Been Deleted 👍🏻</b>\n"
                 "(Due To Avoid Copyright Issues 😌)\n\n"
                 "<b>If You Want That File, Request Again ❤️</b>"
             )
-            
-        deleted_notice = await client.send_message(
-            chat_id=chat_id,
-            text=delete_text
-        )
-        
-        await asyncio.sleep(30)
-        await deleted_notice.delete()
+            deleted_notice = await client.send_message(
+                chat_id=chat_id,
+                text=delete_text
+            )
+            await asyncio.sleep(30)
+            await deleted_notice.delete()
 
     except Exception as e:
         print(f"⚠️ Inline Auto-delete error: {e}", flush=True)
