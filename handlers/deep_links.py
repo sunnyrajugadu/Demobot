@@ -3,6 +3,7 @@ from pyrogram.types import Message
 
 from bot import app
 from database.models import files
+from filters.fsub import enforce_fsub
 
 
 print(
@@ -91,6 +92,10 @@ async def generate_link(
     client,
     message: Message
 ):
+
+    # Force Subscription Check
+    if not await enforce_fsub(client, message, payload="/generate_link"):
+        return
 
     # CHECK REPLY
 
