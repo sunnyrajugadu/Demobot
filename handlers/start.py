@@ -1,4 +1,5 @@
 import io
+import html
 import random
 import asyncio
 import aiohttp
@@ -30,6 +31,108 @@ HTTP_HEADERS = {
     )
 }
 
+
+# ============================================================
+# HELPER: CONVERT PYROGRAM BUTTONS TO BOT API JSON
+# ============================================================
+def markup_to_dict(markup):
+    """Converts Pyrogram InlineKeyboardMarkup to Bot API dict so buttons stay intact."""
+    if not markup or not hasattr(markup, "inline_keyboard"):
+        return None
+
+    keyboard = []
+    for row in markup.inline_keyboard:
+        row_list = []
+        for btn in row:
+            b = {"text": btn.text}
+            if getattr(btn, "url", None):
+                b["url"] = btn.url
+            if getattr(btn, "callback_data", None):
+                b["callback_data"] = btn.callback_data
+            if getattr(btn, "switch_inline_query", None) is not None:
+                b["switch_inline_query"] = btn.switch_inline_query
+            if getattr(btn, "switch_inline_query_current_chat", None) is not None:
+                b["switch_inline_query_current_chat"] = btn.switch_inline_query_current_chat
+            if getattr(btn, "web_app", None):
+                b["web_app"] = {"url": btn.web_app.url}
+            row_list.append(b)
+        keyboard.append(row_list)
+    return {"inline_keyboard": keyboard}
+
+
+# ============================================================
+# HELPER: GUARANTEED BLOCKQUOTE FOR START PHOTO & TEXT
+# ============================================================
+async def send_or_edit_start_blockquote(
+    chat_id: int,
+    reply_to_message_id: int,
+    html_text: str,
+    reply_markup=None,
+    photo_url: str = None,
+    existing_msg: Message = None
+) -> bool:
+    """Uses Telegram Bot API directly so <blockquote> renders on the very first /start."""
+    markup_dict = markup_to_dict(reply_markup)
+
+    # Case 1: Edit an already-sent Pyrogram message (e.g. stream buffer fallback)
+    if existing_msg is not None:
+        is_media = bool(existing_msg.photo or existing_msg.video or existing_msg.document or existing_msg.animation)
+        method = "editMessageCaption" if is_media else "editMessageText"
+        api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+
+        payload = {
+            "chat_id": chat_id,
+            "message_id": existing_msg.id,
+            "parse_mode": "HTML"
+        }
+        if is_media:
+            payload["caption"] = html_text
+        else:
+            payload["text"] = html_text
+
+        if markup_dict:
+            payload["reply_markup"] = markup_dict
+
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0)) as session:
+                async with session.post(api_url, json=payload) as resp:
+                    res = await resp.json(content_type=None)
+                    if resp.status == 200 and res.get("ok"):
+                        return True
+        except Exception as e:
+            print(f"⚠️ Bot API start edit fallback error: {e}", flush=True)
+        return False
+
+    # Case 2: Send brand-new Photo or Text directly via Bot API with <blockquote>
+    method = "sendPhoto" if photo_url else "sendMessage"
+    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+
+    payload = {
+        "chat_id": chat_id,
+        "reply_to_message_id": reply_to_message_id,
+        "parse_mode": "HTML"
+    }
+    if photo_url:
+        payload["photo"] = photo_url
+        payload["caption"] = html_text
+    else:
+        payload["text"] = html_text
+
+    if markup_dict:
+        payload["reply_markup"] = markup_dict
+
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5.0)) as session:
+            async with session.post(api_url, json=payload) as resp:
+                res = await resp.json(content_type=None)
+                if resp.status == 200 and res.get("ok"):
+                    return True
+    except Exception as e:
+        print(f"⚠️ Bot API direct send failed ({e})", flush=True)
+
+    return False
+
+
 async def download_image_stream(url: str) -> io.BytesIO | None:
     """Fallback to stream into RAM if Telegram fails to download directly from the URL."""
     try:
@@ -49,10 +152,8 @@ async def download_image_stream(url: str) -> io.BytesIO | None:
     return None
 
 
-async def background_tasks(user_id: int, username: str, chat_id: int, chat_type: str, message_id: int):
-    """Executes DB updates, logging & reactions in background so /start responds instantly."""
-    
-    # 1. Database and Logging
+async def process_user_db(user_id: int, username: str, chat_id: int, chat_type: str):
+    """Executes DB updates & logs in background so /start responds without DB delay."""
     try:
         existing = await get_user(user_id)
         is_new = existing is None
@@ -75,30 +176,9 @@ async def background_tasks(user_id: int, username: str, chat_id: int, chat_type:
     except Exception as e:
         print(f"[start bg task] error: {e}", flush=True)
 
-    # 2. Reaction (Does not block the bot now)
-    await asyncio.sleep(0.5)
-    try:
-        reaction_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
-        reaction_payload = {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "reaction": [{"type": "emoji", "emoji": "❤️‍🔥"}],
-            "is_big": True
-        }
-
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3.0)) as session:
-            async with session.post(reaction_url, json=reaction_payload) as response:
-                result = await response.json(content_type=None)
-                if response.status == 200 and result.get("ok"):
-                    print("❤️‍🔥 START MESSAGE REACTION SENT", flush=True)
-                else:
-                    print(f"⚠ START REACTION FAILED: {result}", flush=True)
-    except Exception as e:
-        print(f"⚠️ START REACTION FAILED: {e}", flush=True)
-
 
 # ============================================================
-# /START HANDLER (PRIVATE ONLY - INSTANT SPEED)
+# /START HANDLER (PRIVATE ONLY)
 # ============================================================
 @app.on_message(filters.private & filters.command("start"))
 async def start_command(client, message: Message):
@@ -108,14 +188,40 @@ async def start_command(client, message: Message):
     if not user:
         return
 
-    # Trigger Background Tasks Instantly
+    # ========================================================
+    # 1. REACT TO USER'S /START COMMAND FIRST
+    # ========================================================
+    try:
+        reaction_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
+        reaction_payload = {
+            "chat_id": message.chat.id,
+            "message_id": message.id,
+            "reaction": [{"type": "emoji", "emoji": "💋"}],
+            "is_big": True
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3.0)) as session:
+            async with session.post(reaction_url, json=reaction_payload) as response:
+                result = await response.json(content_type=None)
+                if response.status == 200 and result.get("ok"):
+                    print("💋 START MESSAGE REACTION SENT", flush=True)
+                else:
+                    print(f"⚠ START REACTION FAILED: {result}", flush=True)
+    except Exception as e:
+        print(f"⚠️ START REACTION FAILED: {e}", flush=True)
+
+    # Reaction motham pop up avvadaniki 1.5 seconds delay (tharuvaathe start msg vasthundi)
+    await asyncio.sleep(1.5)
+
+    # ====================================================
+    # Background task for database and logging
+    # ====================================================
     asyncio.create_task(
-        background_tasks(
+        process_user_db(
             user_id=user.id,
             username=user.username,
             chat_id=message.chat.id,
-            chat_type=message.chat.type.value,
-            message_id=message.id
+            chat_type=message.chat.type.value
         )
     )
 
@@ -184,10 +290,8 @@ async def start_command(client, message: Message):
                     size_text = str(file_size)
 
                 username = f"@{user.username}" if user.username else "No Username"
-
-                # HTML formatted mention for logs
-                safe_name_log = user.first_name if user.first_name else "User"
-                log_mention = f'<a href="tg://user?id={user.id}">{safe_name_log}</a>'
+                safe_log_name = html.escape(user.first_name or "User")
+                log_mention = f'<a href="tg://user?id={user.id}">{safe_log_name}</a>'
 
                 asyncio.create_task(
                     send_log(
@@ -222,8 +326,7 @@ async def start_command(client, message: Message):
                     chat_id=user.id,
                     from_chat_id=channel_id,
                     message_id=int(message_id),
-                    caption=caption,
-                    parse_mode=enums.ParseMode.HTML
+                    caption=caption
                 )
                 return
             except Exception as e:
@@ -231,41 +334,77 @@ async def start_command(client, message: Message):
                 return await message.reply_text("❌ Unable to send the file.", quote=True)
 
     # ========================================================
-    # NORMAL /START MESSAGE (WITH BLOCKQUOTE)
+    # NORMAL /START MESSAGE (WITH GUARANTEED BLOCKQUOTE)
     # ========================================================
-    
-    # 100% HTML safe mention to avoid breaking the blockquote
-    safe_name = user.first_name if user.first_name else "User"
+    safe_name = html.escape(user.first_name or "User")
     html_mention = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
 
     caption = (
-        f"<blockquote><b>🎬✨ Hey {html_mention}! 👋</b>\n\n"
-        "<b>✨ Welcome to CinemaVeta 🍿🔥</b>\n\n"
-        "<b>🔍 Search your favorite Movies & Series</b>\n\n"
-        "<b>💭 Just type the movie name and get files instantly 🚀</b></blockquote>"
+        f"<blockquote><b>🎬✨ Hey {html_mention}! 👋\n\n"
+        "✨ Welcome to CinemaVeta 🍿🔥\n\n"
+        "🔍 Search your favorite Movies & Series\n\n"
+        "💭 Just type the movie name and get files instantly 🚀</b></blockquote>"
     )
 
-    # If config list is empty, send text message
+    buttons = start_buttons()
+
+    # If config list is empty, send text message with blockquote via Bot API
     if not START_IMAGES:
-        return await message.reply_text(
+        sent_ok = await send_or_edit_start_blockquote(
+            chat_id=message.chat.id,
+            reply_to_message_id=message.id,
+            html_text=caption,
+            reply_markup=buttons
+        )
+        if sent_ok:
+            return
+
+        msg = await message.reply_text(
             text=caption,
-            reply_markup=start_buttons(),
+            reply_markup=buttons,
             parse_mode=enums.ParseMode.HTML,
             quote=True
         )
+        await send_or_edit_start_blockquote(
+            chat_id=message.chat.id,
+            reply_to_message_id=message.id,
+            html_text=caption,
+            reply_markup=buttons,
+            existing_msg=msg
+        )
+        return
 
     selected_url = random.choice(START_IMAGES)
 
-    # 1. Direct Telegram Media Dispatch
+    # 1. Direct Telegram Bot API Media Dispatch (Renders <blockquote> on 1st try!)
+    sent_photo_ok = await send_or_edit_start_blockquote(
+        chat_id=message.chat.id,
+        reply_to_message_id=message.id,
+        html_text=caption,
+        reply_markup=buttons,
+        photo_url=selected_url
+    )
+    if sent_photo_ok:
+        print("⚡ INSTANT CONFIG PHOTO SENT WITH BLOCKQUOTE", flush=True)
+        return
+
+    # 1B. Pyrogram Direct Photo + Bot API Edit Fallback
     try:
-        await message.reply_photo(
+        msg = await message.reply_photo(
             photo=selected_url,
             caption=caption,
-            reply_markup=start_buttons(),
+            reply_markup=buttons,
             parse_mode=enums.ParseMode.HTML,
             quote=True
         )
-        print("⚡ INSTANT CONFIG PHOTO SENT", flush=True)
+        await send_or_edit_start_blockquote(
+            chat_id=message.chat.id,
+            reply_to_message_id=message.id,
+            html_text=caption,
+            reply_markup=buttons,
+            existing_msg=msg
+        )
+        print("⚡ INSTANT CONFIG PHOTO SENT (EDITED BLOCKQUOTE)", flush=True)
         return
     except Exception as err:
         print(f"⚠️ Direct link fetch failed ({err}), trying memory stream buffer...", flush=True)
@@ -275,22 +414,43 @@ async def start_command(client, message: Message):
     if bio:
         bio.seek(0)
         try:
-            await message.reply_photo(
+            msg = await message.reply_photo(
                 photo=bio,
                 caption=caption,
-                reply_markup=start_buttons(),
+                reply_markup=buttons,
                 parse_mode=enums.ParseMode.HTML,
                 quote=True
             )
-            print("⚡ BUFFER STREAM PHOTO SENT", flush=True)
+            await send_or_edit_start_blockquote(
+                chat_id=message.chat.id,
+                reply_to_message_id=message.id,
+                html_text=caption,
+                reply_markup=buttons,
+                existing_msg=msg
+            )
+            print("⚡ BUFFER STREAM PHOTO SENT WITH BLOCKQUOTE", flush=True)
             return
         except Exception:
             pass
 
     # 3. Text fallback if image loading fails completely
-    await message.reply_text(
-        text=caption,
-        reply_markup=start_buttons(),
-        parse_mode=enums.ParseMode.HTML,
-        quote=True
+    sent_text_ok = await send_or_edit_start_blockquote(
+        chat_id=message.chat.id,
+        reply_to_message_id=message.id,
+        html_text=caption,
+        reply_markup=buttons
     )
+    if not sent_text_ok:
+        msg = await message.reply_text(
+            text=caption,
+            reply_markup=buttons,
+            parse_mode=enums.ParseMode.HTML,
+            quote=True
+        )
+        await send_or_edit_start_blockquote(
+            chat_id=message.chat.id,
+            reply_to_message_id=message.id,
+            html_text=caption,
+            reply_markup=buttons,
+            existing_msg=msg
+        )
