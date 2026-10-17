@@ -9,7 +9,6 @@ from pyrogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton
 )
-from pyrogram.errors import UserNotParticipant, ChatAdminRequired, PeerIdInvalid
 
 from bot import app
 from database.models import files
@@ -17,6 +16,7 @@ from handlers.callbacks import make_single_delete_message
 from utils.rename import clean_file_name
 from utils.caption import make_file_caption
 from config import STORAGE_CHANNEL_ID
+from filters.fsub import is_subscribed
 
 
 print("✅ inline.py imported", flush=True)
@@ -114,58 +114,6 @@ async def batch_resolve_bot_files(file_list):
             print(f"⚠️ Batch resolution note for channel {chan}: {err}", flush=True)
 
 
-# ================= ACCURATE INLINE FSUB VERIFIER ================= #
-
-async def get_fsub_channels_list():
-    """Extracts all active FSub channels from config or database."""
-    target_channels = []
-    
-    try:
-        import config
-        for attr in ["FSUB_CHANNELS", "FSUB_CHANNEL", "AUTH_CHANNEL", "CHANNELS"]:
-            val = getattr(config, attr, None)
-            if val:
-                if isinstance(val, list):
-                    target_channels.extend(val)
-                elif isinstance(val, (str, int)):
-                    if isinstance(val, str) and (" " in val or "," in val):
-                        target_channels.extend([x.strip() for x in re.split(r"[\s,]+", val) if x.strip()])
-                    else:
-                        target_channels.append(val)
-    except Exception:
-        pass
-
-    final_list = []
-    for ch in target_channels:
-        if ch and ch not in final_list:
-            final_list.append(clean_channel_id(ch))
-    return final_list
-
-
-async def is_user_subscribed_for_inline(client, user_id: int) -> bool:
-    """Strictly checks if user is a member of all configured FSub channels."""
-    channels = await get_fsub_channels_list()
-    
-    if not channels:
-        return True
-
-    for ch in channels:
-        try:
-            member = await client.get_chat_member(ch, user_id)
-            if member.status.value in ["left", "kicked"]:
-                return False
-        except UserNotParticipant:
-            return False
-        except (ChatAdminRequired, PeerIdInvalid) as e:
-            print(f"⚠️ Bot lacks rights or invalid channel ({ch}): {e}", flush=True)
-            return False
-        except Exception as e:
-            print(f"⚠️ Unexpected FSub check error for {ch}: {e}", flush=True)
-            return False
-            
-    return True
-
-
 # ================= INLINE QUERY HANDLER ================= #
 
 @app.on_inline_query()
@@ -175,13 +123,12 @@ async def inline_search_handler(client, query: InlineQuery):
         if not user:
             return
 
-        # ================= STRICT FSUB ENFORCEMENT ================= #
-        subscribed = await is_user_subscribed_for_inline(client, user.id)
-        if not subscribed:
+        # ================= STRICT FSUB ENFORCEMENT (LINKED TO filters/fsub.py) ================= #
+        if not await is_subscribed(client, user.id):
             # Passes parameter 'inline_fsub' to directly trigger FSub flow inside /start
             return await query.answer(
                 results=[],
-                switch_pm_text="You must join our channel before using this feature",
+                switch_pm_text="You must join our channels before using this feature",
                 switch_pm_parameter="inline_fsub",
                 cache_time=0,
                 is_personal=True
