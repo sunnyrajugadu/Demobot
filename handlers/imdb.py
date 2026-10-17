@@ -11,6 +11,7 @@ from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineK
 from bot import app
 from utils.helpers import normalize_text
 from utils.imdb_banner import create_imdb_banner
+from filters.fsub import enforce_fsub
 
 
 print("✅ handlers/imdb.py imported (IMDb Full Metadata Fix)", flush=True)
@@ -1276,6 +1277,10 @@ async def fetch_full_movie_details(
 @app.on_message(filters.private & filters.command(["imdb"]))
 async def imdb_search_command(client, message: Message):
     try:
+        # Force Subscription Check
+        if not await enforce_fsub(client, message, payload=message.text):
+            return
+
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) < 2:
             return await message.reply_text(
