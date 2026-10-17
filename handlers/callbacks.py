@@ -32,8 +32,12 @@ from utils.detectors import detect_languages
 
 from filters.fsub import (
     is_subscribed,
-    FSUB_ALERT
+    get_unjoined_channels,
+    get_fsub_buttons,
+    FSUB_ALERT,
+    FSUB_SUCCESS_ALERT
 )
+
 
 from keyboards.buttons import (
     start_buttons,
@@ -1154,13 +1158,6 @@ async def fsub_retry_callback(
         user_id = query.from_user.id
         raw_data = query.data.split(":", 1)[1].strip()
 
-        # Re-check channel membership
-        if not await is_subscribed(client, user_id):
-            return await query.answer(
-                FSUB_ALERT,
-                show_alert=True
-            )
-
         # Parse message_id and payload if packed together
         reply_to_id = None
         payload = raw_data
@@ -1174,7 +1171,29 @@ async def fsub_retry_callback(
         if not reply_to_id and query.message and query.message.reply_to_message:
             reply_to_id = query.message.reply_to_message.id
 
-        await query.answer("✅ Verified! Processing request...")
+        # Re-check channel membership and update buttons for remaining unjoined channels
+        unjoined = await get_unjoined_channels(client, user_id)
+        if unjoined:
+            try:
+                await query.message.edit_reply_markup(
+                    reply_markup=get_fsub_buttons(
+                        reply_to_id or 0,
+                        payload,
+                        unjoined=unjoined
+                    )
+                )
+            except Exception:
+                pass
+            return await query.answer(
+                FSUB_ALERT,
+                show_alert=True
+            )
+
+        # Show success alert popup when joined in all channels
+        await query.answer(
+            FSUB_SUCCESS_ALERT,
+            show_alert=True
+        )
 
         # Delete the FSub warning prompt
         try:
@@ -1260,6 +1279,7 @@ async def fsub_retry_callback(
             await query.answer("❌ Verification check failed.", show_alert=True)
         except Exception:
             pass
+
 
 
 # ============================================================
