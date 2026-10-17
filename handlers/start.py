@@ -1,251 +1,289 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import io
+import random
+import asyncio
 import aiohttp
+from bson import ObjectId
 
 from pyrogram import filters, enums
 from pyrogram.types import Message
 
 from bot import app
-from config import STATS_VIDEO, BOT_TOKEN
-from database import get_collection
+from config import START_IMAGES, BOT_TOKEN
+from database.models import (
+    save_user,
+    save_chat,
+    update_activity,
+    get_user,
+    files
+)
+from keyboards.buttons import start_buttons
+from utils.logger import send_log
+from utils.caption import make_file_caption
 from filters.fsub import enforce_fsub
 
+print("✅ start.py imported", flush=True)
 
-# ============================================================
-# BOT START TIME
-# ============================================================
+HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+}
 
-BOT_START_TIME = datetime.now(
-    ZoneInfo("Asia/Kolkata")
-)
-
-
-# ============================================================
-# HELPER: GUARANTEED BLOCKQUOTE FOR VIDEO CAPTION & TEXT
-# ============================================================
-
-async def edit_stats_with_quote(msg: Message, html_text: str):
-    """Edits video caption or text via Telegram Bot API so <blockquote> always renders."""
-    is_media = bool(msg.video or msg.photo or msg.document or msg.animation)
-    method = "editMessageCaption" if is_media else "editMessageText"
-    api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
-
-    payload = {
-        "chat_id": msg.chat.id,
-        "message_id": msg.id,
-        "parse_mode": "HTML"
-    }
-    if is_media:
-        payload["caption"] = html_text
-    else:
-        payload["text"] = html_text
-
+async def download_image_stream(url: str) -> io.BytesIO | None:
+    """Fallback to stream into RAM if Telegram fails to download directly from the URL."""
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0)) as session:
-            async with session.post(api_url, json=payload) as resp:
-                res = await resp.json(content_type=None)
-                if resp.status == 200 and res.get("ok"):
-                    return
-    except Exception as api_err:
-        print(f"⚠️ Bot API stats edit fallback: {api_err}", flush=True)
+        async with aiohttp.ClientSession(
+            headers=HTTP_HEADERS,
+            timeout=aiohttp.ClientTimeout(total=2.0)
+        ) as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    if data:
+                        bio = io.BytesIO(data)
+                        bio.name = "start_image.jpg"
+                        return bio
+    except Exception:
+        pass
+    return None
 
-    if is_media:
-        await msg.edit_caption(
-            caption=html_text,
-            parse_mode=enums.ParseMode.HTML
+
+async def process_user_db(user_id: int, username: str, chat_id: int, chat_type: str):
+    """Executes DB updates & logs in background so /start responds instantly without delay."""
+    try:
+        existing = await get_user(user_id)
+        is_new = existing is None
+
+        await save_user(user_id, username)
+        await update_activity(user_id)
+        await save_chat(
+            chat_id=chat_id,
+            chat_type=chat_type,
+            user_id=user_id
         )
-    else:
-        await msg.edit_text(
-            text=html_text,
-            parse_mode=enums.ParseMode.HTML
-        )
+
+        if is_new:
+            await send_log(
+                f"📈 <b>New User Started Bot</b>\n\n"
+                f"🆔 ID: <code>{user_id}</code>\n"
+                f"👤 Username: @{username if username else 'No Username'}\n"
+                f"⚡ Action: START"
+            )
+    except Exception as e:
+        print(f"[start bg task] error: {e}", flush=True)
 
 
 # ============================================================
-# STATS COMMAND
+# /START HANDLER (PRIVATE ONLY - INSTANT SPEED)
 # ============================================================
+@app.on_message(filters.private & filters.command("start"))
+async def start_command(client, message: Message):
+    print("START HANDLER CALLED", flush=True)
+    user = message.from_user
 
-@app.on_message(
-    filters.command("stats")
-)
-async def stats_command(
-    client,
-    message: Message
-):
-
-    # ================= ONE-LINE FSUB ENFORCEMENT ================= #
-    if not await enforce_fsub(client, message, payload="/stats"):
+    if not user:
         return
 
-    # ================= INITIAL MESSAGE (VIDEO/TEXT QUOTE REPLY) ================= #
-    initial_caption = "<blockquote>✨ <b>Checking Stats...</b></blockquote>"
+    # ========================================================
+    # 1. REACT TO USER'S /START COMMAND FIRST
+    # ========================================================
+    try:
+        reaction_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
+        reaction_payload = {
+            "chat_id": message.chat.id,
+            "message_id": message.id,
+            "reaction": [{"type": "emoji", "emoji": "💋"}],
+            "is_big": True
+        }
 
-    if STATS_VIDEO:
-        try:
-            msg = await message.reply_video(
-                video=STATS_VIDEO,
-                caption=initial_caption,
-                parse_mode=enums.ParseMode.HTML,
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3.0)) as session:
+            async with session.post(reaction_url, json=reaction_payload) as response:
+                result = await response.json(content_type=None)
+                if response.status == 200 and result.get("ok"):
+                    print("💋 START MESSAGE REACTION SENT", flush=True)
+                else:
+                    print(f"⚠ START REACTION FAILED: {result}", flush=True)
+    except Exception as e:
+        print(f"⚠️ START REACTION FAILED: {e}", flush=True)
+
+    # Reaction motham pop up avvadaniki 1.5 seconds delay
+    await asyncio.sleep(1.5)
+
+    # ====================================================
+    # Background task for database and logging
+    # ====================================================
+    asyncio.create_task(
+        process_user_db(
+            user_id=user.id,
+            username=user.username,
+            chat_id=message.chat.id,
+            chat_type=message.chat.type.value
+        )
+    )
+
+    # ====================================================
+    # PAYLOAD / DEEP LINK CHECK
+    # ====================================================
+    if len(message.command) > 1:
+        payload = message.command[1].strip()
+
+        # =================================================
+        # 1. INLINE FSUB TRIGGER
+        # =================================================
+        if payload in ["inline_fsub", "fsub"]:
+            if not await enforce_fsub(client, message, payload=f"/start {payload}"):
+                return
+
+            return await message.reply_text(
+                "✅ <b>You have joined all required channels!</b>\n\n"
+                "You can now use Inline search freely.",
+                reply_markup=start_buttons(),
                 quote=True
             )
-            await edit_stats_with_quote(msg, initial_caption)
-        except Exception as e:
-            print(f"⚠️ Video reply failed ({e}), sending text instead...", flush=True)
-            msg = await message.reply_text(
-                initial_caption,
-                parse_mode=enums.ParseMode.HTML,
-                quote=True
-            )
-            await edit_stats_with_quote(msg, initial_caption)
-    else:
-        msg = await message.reply_text(
-            initial_caption,
+
+        # =================================================
+        # 2. FILE DEEP LINK
+        # =================================================
+        if payload.startswith("file_"):
+            if not await enforce_fsub(client, message, payload=f"/start {payload}"):
+                return
+
+            file_id = payload.replace("file_", "", 1).strip()
+
+            # ObjectId validation
+            try:
+                object_id = ObjectId(file_id)
+            except Exception:
+                return await message.reply_text("❌ Invalid file link.", quote=True)
+
+            # Find file in database
+            try:
+                file = await files().find_one({"_id": object_id})
+            except Exception as e:
+                print(f"[start] File lookup error: {e}", flush=True)
+                return await message.reply_text("❌ Unable to find the file.", quote=True)
+
+            if not file:
+                return await message.reply_text("❌ File not found.", quote=True)
+
+            # Click logging in background
+            try:
+                file_name = file.get("file_name") or "Unknown File"
+                file_size = file.get("file_size_bytes") or 0
+                movie_name = file.get("movie_name") or "Unknown"
+
+                if isinstance(file_size, (int, float)):
+                    if file_size >= 1024 ** 3:
+                        size_text = f"{file_size / (1024 ** 3):.2f} GB"
+                    elif file_size >= 1024 ** 2:
+                        size_text = f"{file_size / (1024 ** 2):.2f} MB"
+                    elif file_size >= 1024:
+                        size_text = f"{file_size / 1024:.2f} KB"
+                    else:
+                        size_text = f"{file_size} B"
+                else:
+                    size_text = str(file_size)
+
+                username = f"@{user.username}" if user.username else "No Username"
+
+                asyncio.create_task(
+                    send_log(
+                        f"🔗 <b>FILE LINK CLICKED</b>\n\n"
+                        f"👤 <b>User:</b> {user.mention}\n"
+                        f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
+                        f"👤 <b>Username:</b> {username}\n\n"
+                        f"🎬 <b>Movie:</b> {movie_name}\n"
+                        f"📒 <b>File:</b> {file_name}\n"
+                        f"📪 <b>Size:</b> {size_text}\n\n"
+                        f"🆔 <b>File ID:</b> <code>{file_id}</code>\n\n"
+                        f"⚡ <b>Action:</b> FILE LINK CLICK"
+                    )
+                )
+            except Exception as e:
+                print(f"[start] File log warning: {e}", flush=True)
+
+            # Channel information & Copy File
+            channel_id = file.get("channel_id")
+            message_id = file.get("message_id")
+
+            if not channel_id or not message_id:
+                return await message.reply_text("❌ File information is incomplete.", quote=True)
+
+            try:
+                caption = make_file_caption(file)
+            except Exception:
+                caption = None
+
+            try:
+                await client.copy_message(
+                    chat_id=user.id,
+                    from_chat_id=channel_id,
+                    message_id=int(message_id),
+                    caption=caption
+                )
+                return
+            except Exception as e:
+                print(f"[start] File send error: {e}", flush=True)
+                return await message.reply_text("❌ Unable to send the file.", quote=True)
+
+    # ========================================================
+    # NORMAL /START MESSAGE (WITH BLOCKQUOTE)
+    # ========================================================
+    # Changed from markdown to HTML blockquote for proper rendering
+    caption = (
+        f"<blockquote><b>🎬✨ Hey {user.mention}! 👋</b>\n\n"
+        "<b>✨ Welcome to CinemaVeta 🍿🔥</b>\n\n"
+        "<b>🔍 Search your favorite Movies & Series</b>\n\n"
+        "<b>💭 Just type the movie name and get files instantly 🚀</b></blockquote>"
+    )
+
+    # If config list is empty, send text message
+    if not START_IMAGES:
+        return await message.reply_text(
+            text=caption,
+            reply_markup=start_buttons(),
             parse_mode=enums.ParseMode.HTML,
             quote=True
         )
-        await edit_stats_with_quote(msg, initial_caption)
 
-    # ========================================================
-    # COLLECTIONS
-    # ========================================================
+    selected_url = random.choice(START_IMAGES)
 
-    users = get_collection(
-        "users"
-    )
-
-    files = get_collection(
-        "files"
-    )
-
-    chats = get_collection(
-        "chats"
-    )
-
-    # ========================================================
-    # TOTAL USERS
-    # ========================================================
-
-    total_users = await users.count_documents(
-        {}
-    )
-
-    # ========================================================
-    # TOTAL FILES
-    # ========================================================
-
-    total_files = await files.count_documents(
-        {}
-    )
-
-    # ========================================================
-    # TOTAL CHATS
-    # ========================================================
-
-    total_chats = await chats.count_documents(
-        {}
-    )
-
-    # ========================================================
-    # TOTAL STORAGE
-    # ========================================================
-
-    pipeline = [
-        {
-            "$group": {
-                "_id": None,
-                "total": {
-                    "$sum": "$file_size_bytes"
-                }
-            }
-        }
-    ]
-
-    result = await files.aggregate(
-        pipeline
-    ).to_list(1)
-
-    total_bytes = (
-        result[0]["total"]
-        if result
-        else 0
-    )
-
-    # ========================================================
-    # FORMAT STORAGE SIZE
-    # ========================================================
-
-    def format_size(
-        size
-    ):
-
-        for unit in [
-            "B",
-            "KB",
-            "MB",
-            "GB",
-            "TB"
-        ]:
-
-            if size < 1024:
-
-                return (
-                    f"{size:.2f} {unit}"
-                )
-
-            size /= 1024
-
-        return (
-            f"{size:.2f} PB"
-        )
-
-    # ========================================================
-    # UPTIME
-    # ========================================================
-
-    now = datetime.now(
-        ZoneInfo("Asia/Kolkata")
-    )
-
-    uptime = (
-        now - BOT_START_TIME
-    )
-
-    days = uptime.days
-
-    hours, rem = divmod(
-        uptime.seconds,
-        3600
-    )
-
-    minutes, seconds = divmod(
-        rem,
-        60
-    )
-
-    uptime_text = (
-        f"{days}d {hours}h "
-        f"{minutes}m {seconds}s"
-    )
-
-    # ========================================================
-    # STATS MESSAGE FORMATTING (WITH QUOTE BOX)
-    # ========================================================
-
-    stats_text = (
-        "<blockquote>📊 <b>𝖢𝗂𝗇𝖾𝗆𝖺𝖵𝖾𝗍𝖺 𝖲𝗍𝖺𝗍𝗂𝗌𝗍𝗂𝖼𝗌</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔷 <b>𝖳𝗈𝗍𝖺𝗅 𝖴𝗌𝖾𝗋𝗌</b>   »   <code>{total_users}</code>\n\n"
-        f"🔷 <b>𝖳𝗈𝗍𝖺𝗅 𝖥𝗂𝗅𝖾𝗌</b>   »   <code>{total_files}</code>\n\n"
-        f"🔷 <b>𝖳𝗈𝗍𝖺𝗅 𝖢𝗁𝖺𝗍𝗌</b>   »   <code>{total_chats}</code>\n\n"
-        f"🔷 <b>𝖳𝗈𝗍𝖺𝗅 𝖲𝗍𝗈𝗋𝖺𝗀𝖾</b>   »   <code>{format_size(total_bytes)}</code>\n\n"
-        f"🔷 <b>𝖴𝗉𝗍𝗂𝗆𝖾</b>   »   <code>{uptime_text}</code>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━</blockquote>"
-    )
-
-    # ========================================================
-    # EDIT VIDEO CAPTION OR TEXT
-    # ========================================================
+    # 1. Direct Telegram Media Dispatch
     try:
-        await edit_stats_with_quote(msg, stats_text)
-    except Exception as e:
-        print(f"⚠️ Failed to edit stats message: {e}", flush=True)
+        await message.reply_photo(
+            photo=selected_url,
+            caption=caption,
+            reply_markup=start_buttons(),
+            parse_mode=enums.ParseMode.HTML,
+            quote=True
+        )
+        print("⚡ INSTANT CONFIG PHOTO SENT", flush=True)
+        return
+    except Exception as err:
+        print(f"⚠️ Direct link fetch failed ({err}), trying memory stream buffer...", flush=True)
+
+    # 2. In-Memory Stream Fallback
+    bio = await download_image_stream(selected_url)
+    if bio:
+        bio.seek(0)
+        try:
+            await message.reply_photo(
+                photo=bio,
+                caption=caption,
+                reply_markup=start_buttons(),
+                parse_mode=enums.ParseMode.HTML,
+                quote=True
+            )
+            print("⚡ BUFFER STREAM PHOTO SENT", flush=True)
+            return
+        except Exception:
+            pass
+
+    # 3. Text fallback if image loading fails completely
+    await message.reply_text(
+        text=caption,
+        reply_markup=start_buttons(),
+        parse_mode=enums.ParseMode.HTML,
+        quote=True
+    )
