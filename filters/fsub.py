@@ -13,6 +13,7 @@ from config import (
 # ================= FSUB CONSTANTS ================= #
 FSUB_CAPTION = "❗**You must join our channels before using this feature.**"
 FSUB_ALERT = "I Like Your Smartness, But Don't Be Oversmart Okay 😒"
+FSUB_SUCCESS_ALERT = "✅ Thank you for joining our channels!"
 
 
 # ================= SINGLE CHANNEL CHECKER ================= #
