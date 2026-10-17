@@ -73,7 +73,7 @@ CHANNEL_INVITE_LINK = get_env(
 
 # START IMAGES #
 START_IMAGES = [
-    "https://ibb.co/XkvWrMwY",
+    "https://ibb.co/bjQS30sM",
 ]
 
 
