@@ -22,6 +22,13 @@ from utils.logger import send_log
 from utils.caption import make_file_caption
 from filters.fsub import enforce_fsub
 
+# Import delete handlers from callbacks so 5-min auto delete works for deep links too
+from handlers.callbacks import (
+    make_single_instruction_message,
+    delete_instruction_later,
+    delete_single_file_later
+)
+
 print("✅ start.py imported", flush=True)
 
 HTTP_HEADERS = {
@@ -322,12 +329,38 @@ async def start_command(client, message: Message):
                 caption = None
 
             try:
-                await client.copy_message(
+                sent_message = await client.copy_message(
                     chat_id=user.id,
                     from_chat_id=channel_id,
                     message_id=int(message_id),
                     caption=caption
                 )
+
+                if sent_message:
+                    # Send separate instruction message that deletes in 30 seconds
+                    instruction_msg = await client.send_message(
+                        chat_id=user.id,
+                        text=make_single_instruction_message()
+                    )
+                    if instruction_msg:
+                        asyncio.create_task(
+                            delete_instruction_later(
+                                client=client,
+                                chat_id=user.id,
+                                message_id=instruction_msg.id
+                            )
+                        )
+
+                    # Auto delete file after 5 minutes and send delete notification
+                    asyncio.create_task(
+                        delete_single_file_later(
+                            client=client,
+                            chat_id=user.id,
+                            message_id=sent_message.id,
+                            user=user
+                        )
+                    )
+
                 return
             except Exception as e:
                 print(f"[start] File send error: {e}", flush=True)
