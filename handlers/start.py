@@ -49,8 +49,10 @@ async def download_image_stream(url: str) -> io.BytesIO | None:
     return None
 
 
-async def process_user_db(user_id: int, username: str, chat_id: int, chat_type: str):
-    """Executes DB updates & logs in background so /start responds instantly without delay."""
+async def background_tasks(user_id: int, username: str, chat_id: int, chat_type: str, message_id: int):
+    """Executes DB updates, logging & reactions in background so /start responds instantly."""
+    
+    # 1. Database and Logging
     try:
         existing = await get_user(user_id)
         is_new = existing is None
@@ -73,6 +75,27 @@ async def process_user_db(user_id: int, username: str, chat_id: int, chat_type: 
     except Exception as e:
         print(f"[start bg task] error: {e}", flush=True)
 
+    # 2. Reaction (Does not block the bot now)
+    await asyncio.sleep(0.5)
+    try:
+        reaction_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
+        reaction_payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reaction": [{"type": "emoji", "emoji": "❤️‍🔥"}],
+            "is_big": True
+        }
+
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3.0)) as session:
+            async with session.post(reaction_url, json=reaction_payload) as response:
+                result = await response.json(content_type=None)
+                if response.status == 200 and result.get("ok"):
+                    print("❤️‍🔥 START MESSAGE REACTION SENT", flush=True)
+                else:
+                    print(f"⚠ START REACTION FAILED: {result}", flush=True)
+    except Exception as e:
+        print(f"⚠️ START REACTION FAILED: {e}", flush=True)
+
 
 # ============================================================
 # /START HANDLER (PRIVATE ONLY - INSTANT SPEED)
@@ -85,40 +108,14 @@ async def start_command(client, message: Message):
     if not user:
         return
 
-    # ========================================================
-    # 1. REACT TO USER'S /START COMMAND FIRST
-    # ========================================================
-    try:
-        reaction_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMessageReaction"
-        reaction_payload = {
-            "chat_id": message.chat.id,
-            "message_id": message.id,
-            "reaction": [{"type": "emoji", "emoji": "💋"}],
-            "is_big": True
-        }
-
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3.0)) as session:
-            async with session.post(reaction_url, json=reaction_payload) as response:
-                result = await response.json(content_type=None)
-                if response.status == 200 and result.get("ok"):
-                    print("💋 START MESSAGE REACTION SENT", flush=True)
-                else:
-                    print(f"⚠ START REACTION FAILED: {result}", flush=True)
-    except Exception as e:
-        print(f"⚠️ START REACTION FAILED: {e}", flush=True)
-
-    # Reaction motham pop up avvadaniki 1.5 seconds delay
-    await asyncio.sleep(1.5)
-
-    # ====================================================
-    # Background task for database and logging
-    # ====================================================
+    # Trigger Background Tasks Instantly
     asyncio.create_task(
-        process_user_db(
+        background_tasks(
             user_id=user.id,
             username=user.username,
             chat_id=message.chat.id,
-            chat_type=message.chat.type.value
+            chat_type=message.chat.type.value,
+            message_id=message.id
         )
     )
 
@@ -139,6 +136,7 @@ async def start_command(client, message: Message):
                 "✅ <b>You have joined all required channels!</b>\n\n"
                 "You can now use Inline search freely.",
                 reply_markup=start_buttons(),
+                parse_mode=enums.ParseMode.HTML,
                 quote=True
             )
 
@@ -187,10 +185,14 @@ async def start_command(client, message: Message):
 
                 username = f"@{user.username}" if user.username else "No Username"
 
+                # HTML formatted mention for logs
+                safe_name_log = user.first_name if user.first_name else "User"
+                log_mention = f'<a href="tg://user?id={user.id}">{safe_name_log}</a>'
+
                 asyncio.create_task(
                     send_log(
                         f"🔗 <b>FILE LINK CLICKED</b>\n\n"
-                        f"👤 <b>User:</b> {user.mention}\n"
+                        f"👤 <b>User:</b> {log_mention}\n"
                         f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
                         f"👤 <b>Username:</b> {username}\n\n"
                         f"🎬 <b>Movie:</b> {movie_name}\n"
@@ -220,7 +222,8 @@ async def start_command(client, message: Message):
                     chat_id=user.id,
                     from_chat_id=channel_id,
                     message_id=int(message_id),
-                    caption=caption
+                    caption=caption,
+                    parse_mode=enums.ParseMode.HTML
                 )
                 return
             except Exception as e:
@@ -230,9 +233,13 @@ async def start_command(client, message: Message):
     # ========================================================
     # NORMAL /START MESSAGE (WITH BLOCKQUOTE)
     # ========================================================
-    # Changed from markdown to HTML blockquote for proper rendering
+    
+    # 100% HTML safe mention to avoid breaking the blockquote
+    safe_name = user.first_name if user.first_name else "User"
+    html_mention = f'<a href="tg://user?id={user.id}">{safe_name}</a>'
+
     caption = (
-        f"<blockquote><b>🎬✨ Hey {user.mention}! 👋</b>\n\n"
+        f"<blockquote><b>🎬✨ Hey {html_mention}! 👋</b>\n\n"
         "<b>✨ Welcome to CinemaVeta 🍿🔥</b>\n\n"
         "<b>🔍 Search your favorite Movies & Series</b>\n\n"
         "<b>💭 Just type the movie name and get files instantly 🚀</b></blockquote>"
